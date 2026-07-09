@@ -3,7 +3,7 @@
 // (Supabase dashboard -> Project Settings -> API)
 // ============================================================
 const SUPABASE_URL = "https://YOUR-PROJECT-REF.supabase.co";
-const SUPABASE_ANON_KEY = "YOUR-ANON-PUBLIC-KEY";
+const SUPABASE_ANON_KEY = "sb_publishable_Vmut8s10TieMWXXCjnzj1A_t3I7euYR";
 
 const CAT_COLORS = {
   "LTM": "#a389f4",
