@@ -259,6 +259,7 @@ function openEditModal(id){
   document.getElementById('f-count').value = sword.ct ?? '';
   document.getElementById('f-desc').value = sword.descr || '';
   updateImagePreview(sword.img || null);
+  document.getElementById('deleteBtn').style.display = 'block';
   modalOverlay.classList.add('show');
 }
 
@@ -276,6 +277,7 @@ function openAddModal(){
   document.getElementById('f-count').value = '';
   document.getElementById('f-desc').value = '';
   updateImagePreview(null);
+  document.getElementById('deleteBtn').style.display = 'none';
   modalOverlay.classList.add('show');
   document.getElementById('f-name').focus();
 }
@@ -338,6 +340,34 @@ editForm.addEventListener('submit', async (e) => {
     alert("Could not reach the database. Please try again.");
   }finally{
     saveBtn.disabled = false;
+  }
+});
+
+document.getElementById('deleteBtn').addEventListener('click', async () => {
+  if(editingId === null) return;
+  const sword = ALL_SWORDS.find(s => s.id === editingId);
+  const name = sword ? sword.n : 'this sword';
+  if(!confirm(`Delete "${name}"? This can't be undone.`)) return;
+
+  const deleteBtn = document.getElementById('deleteBtn');
+  deleteBtn.disabled = true;
+  try{
+    const { error } = await sb.from('swords').delete().eq('id', editingId);
+    if(error){
+      alert(error.message.includes('row-level security')
+        ? "Wrong editor password — this sword wasn't deleted."
+        : (error.message || "Could not delete this sword."));
+      return;
+    }
+    await fetchSwords();
+    closeEditModal();
+    renderGrid();
+    renderLastUpdated();
+  }catch(err){
+    console.error(err);
+    alert("Could not reach the database. Please try again.");
+  }finally{
+    deleteBtn.disabled = false;
   }
 });
 
