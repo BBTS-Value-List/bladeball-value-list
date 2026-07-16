@@ -448,7 +448,7 @@ async function handlePublicApiTeam(request, env) {
 }
 
 async function handleCreateSword(request, env, actor) {
-  const payload = normalizeSwordPayload(await request.json(), actor);
+  const payload = normalizeSwordPayload(await request.json());
   const image = payload.img !== undefined ? await persistMedia(env, payload.img, payload.n, "card-image") : { mediaKey: null };
   const detailMedia = payload.detailMedia !== undefined ? await persistMedia(env, payload.detailMedia, payload.n, "detail") : { mediaKey: null };
   const slashMedia = payload.slashMedia !== undefined ? await persistMedia(env, payload.slashMedia, payload.n, "slash") : { mediaKey: null };
@@ -496,7 +496,7 @@ async function handleUpdateSword(request, env, id, actor) {
     throw new HttpError(404, "Sword not found.");
   }
 
-  const payload = normalizeSwordPayload(await request.json(), actor);
+  const payload = normalizeSwordPayload(await request.json());
   const image = payload.img !== undefined ? await persistMedia(env, payload.img, payload.n, "card-image") : { mediaKey: existing.image_key };
   const detailMedia = payload.detailMedia !== undefined ? await persistMedia(env, payload.detailMedia, payload.n, "detail") : { mediaKey: existing.detail_image_key };
   const slashMedia = payload.slashMedia !== undefined ? await persistMedia(env, payload.slashMedia, payload.n, "slash") : { mediaKey: existing.slash_media_key };
