@@ -476,6 +476,7 @@ async function handleCreateSword(request, env, actor) {
   ).run();
 
   const created = await getSwordById(env, Number(result.meta.last_row_id));
+  const mediaMap = await loadMediaDescriptorMap(env, collectSwordMediaKeys([created]));
   await writeAuditLog(env, {
     actor,
     actionType: "sword.create",
@@ -484,10 +485,10 @@ async function handleCreateSword(request, env, actor) {
     entityPublicId: created.card_id,
     summary: `Created ${created.n}`,
     beforeSnapshot: null,
-    afterSnapshot: created
+    afterSnapshot: serializeSword(created, mediaMap)
   });
 
-  return json({ sword: serializeSword(created) }, 201);
+  return json({ sword: serializeSword(created, mediaMap) }, 201);
 }
 
 async function handleUpdateSword(request, env, id, actor) {
@@ -524,6 +525,7 @@ async function handleUpdateSword(request, env, id, actor) {
   ).run();
 
   const updated = await getSwordById(env, id);
+  const mediaMap = await loadMediaDescriptorMap(env, collectSwordMediaKeys([updated]));
   await writeAuditLog(env, {
     actor,
     actionType: "sword.update",
@@ -532,10 +534,10 @@ async function handleUpdateSword(request, env, id, actor) {
     entityPublicId: updated.card_id,
     summary: `Updated ${updated.n}`,
     beforeSnapshot,
-    afterSnapshot: serializeSword(updated)
+    afterSnapshot: serializeSword(updated, mediaMap)
   });
 
-  return json({ sword: serializeSword(updated) });
+  return json({ sword: serializeSword(updated, mediaMap) });
 }
 
 async function handleDeleteSword(request, env, id, actor) {
