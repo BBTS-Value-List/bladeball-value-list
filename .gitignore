@@ -15,3 +15,6 @@ coverage/
 .dev.vars.*
 !.env.example
 tmp-api.json
+tmp-audit-backfill.sql
+tmp-role-update.sql
+.playwright-cli/

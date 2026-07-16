@@ -1,20 +1,17 @@
-# Code Of Conduct
+# Code of Conduct
 
-## Our Standard
+## Our standard
 
-Use this repository in a direct, respectful, and practical way.
+Use this repository constructively and respectfully. Keep discussion focused on the project, its data, and proposed changes.
 
-Expected behavior:
+Expected behavior includes good-faith collaboration, clear technical feedback, respect for contributors and users, and responsible handling of public issue content.
 
-- discuss changes in good faith
-- keep criticism focused on the code, data, or behavior
-- avoid harassment, abuse, threats, or personal attacks
-- avoid spam, trolling, and disruptive behavior
+Harassment, threats, personal attacks, spam, doxxing, and disruptive behavior are not acceptable.
 
 ## Enforcement
 
-Repository maintainers may edit, hide, lock, or remove content and may restrict access to contributors who repeatedly ignore these expectations.
+Maintainers may edit, hide, lock, or remove content and may restrict repository access when these expectations are repeatedly ignored.
 
 ## Contact
 
-Questions or conduct concerns can be sent to [bbtsl@pve.bio](mailto:bbtsl@pve.bio).
+Conduct concerns can be sent to [bbtsl@pve.bio](mailto:bbtsl@pve.bio).

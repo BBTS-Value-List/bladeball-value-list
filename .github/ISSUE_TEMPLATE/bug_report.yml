@@ -27,3 +27,22 @@ body:
     attributes:
       label: Affected area
       description: Public site, admin flow, images, worker API, auth, or something else
+    validations:
+      required: true
+  - type: input
+    id: url
+    attributes:
+      label: Affected URL or route
+      placeholder: https://bbtsl.lol/ or /api/swords
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Browser or environment
+      placeholder: Chrome 126 on Windows 11, or local Wrangler preview
+    validations:
+      required: true
+  - type: markdown
+    attributes:
+      value: "Do not use this form for vulnerabilities or include credentials, session cookies, or private account details. See SECURITY.md for private reporting."

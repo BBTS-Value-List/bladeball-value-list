@@ -27,7 +27,6 @@
   "vars": {
     "SITE_NAME": "BBTSL Blade Ball Value List",
     "PUBLIC_SITE_URL": "https://bbtsl.lol",
-    "ADMIN_TOTP_DEFAULT_ISSUER": "BBTSL Blade Ball Value List",
-    "ADMIN_TOTP_DEFAULT_ACCOUNT": "bbtsl-admin"
+    "DISCORD_REDIRECT_URI": "https://bbtsl.lol/api/auth/callback"
   }
 }

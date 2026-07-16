@@ -1,6 +1,6 @@
-## Summary
+## What changed
 
-- what changed
+- concise description
 
 ## Why
 
@@ -8,10 +8,13 @@
 
 ## Checks
 
-- local run tested
-- UI checked if applicable
-- no secrets committed
+- [ ] `npm run check`
+- [ ] `git diff --check`
+- [ ] `npx wrangler deploy --dry-run` when Worker or configuration changed
+- [ ] affected local route or API checked
+- [ ] UI screenshot attached when visible behavior changed
+- [ ] no credentials, `.env`, `.dev.vars`, local state, or temporary artifacts included
 
-## Notes
+## Data or configuration impact
 
-- extra context
+- none, or explain the change and any required maintainer action

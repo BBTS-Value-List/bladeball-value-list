@@ -9,9 +9,10 @@ const HTML_SECURITY_HEADERS = {
     "base-uri 'self'",
     "connect-src 'self'",
     "font-src 'self' https://fonts.gstatic.com data:",
-    "form-action 'self'",
+    "form-action 'self' https://discord.com",
     "frame-ancestors 'none'",
-    "img-src 'self' data: blob:",
+    "img-src 'self' data: blob: https://cdn.discordapp.com",
+    "media-src 'self' data: blob:",
     "script-src 'self'",
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com"
   ].join("; "),
@@ -21,88 +22,185 @@ const HTML_SECURITY_HEADERS = {
   "x-frame-options": "DENY"
 };
 
-const SESSION_COOKIE = "bbtsl_admin_session";
-const TOTP_CONFIG_KEY = "admin_totp";
-const TOTP_DIGITS = 6;
-const TOTP_PERIOD_SECONDS = 30;
-const TOTP_WINDOW_STEPS = 1;
-const MAX_EDIT_VALUE = 10_000_000;
-const MAX_IMAGE_BYTES = 3 * 1024 * 1024;
-const DIRECT_IMAGE_READ_LIMIT = 512 * 1024;
-const SESSION_LIFETIME_SECONDS = 60 * 60 * 12;
-const OWNER_HEADER = "x-owner-key";
+const SESSION_COOKIE = "bbtsl_session";
+const OAUTH_STATE_COOKIE = "bbtsl_oauth_state";
 const APP_REQUEST_HEADER = "x-bbts-request";
 const AUTH_VERIFY_BUCKET = "auth_verify";
-const OWNER_BUCKET = "owner_totp";
 const ADMIN_MUTATION_BUCKET = "admin_mutation";
-let coreSchemaReadyPromise = null;
-
+const PUBLIC_API_BUCKET = "public_api";
+const SESSION_LIFETIME_SECONDS = 60 * 60 * 12;
+const REAUTH_WINDOW_SECONDS = 60 * 10;
+const OAUTH_STATE_LIFETIME_SECONDS = 60 * 10;
+const PUBLIC_API_LIMIT = 100;
+const PUBLIC_API_DEFAULT_LIMIT = 50;
+const PUBLIC_API_MAX_OFFSET = 10_000;
+const OAUTH_RATE_LIMIT = 20;
+const MAX_EDIT_VALUE = 10_000_000;
+const MAX_TEXT_LENGTH = 2_000;
+const MAX_IMAGE_BYTES = 3 * 1024 * 1024;
+const MAX_MEDIA_BYTES = 8 * 1024 * 1024;
+const DIRECT_MEDIA_READ_LIMIT = 512 * 1024;
+const CARD_ID_PREFIX = "#";
+const CARD_ID_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+const CARD_ID_LENGTH = 6;
+const MEDIA_KEY_LIMIT = 512;
+const MEDIA_VARIANT_NAMES = ["low", "medium", "original"];
+const USER_ROLE_VALUES = ["Viewer", "Contributor", "Editor", "Maintainer", "Administrator", "Developer", "Owner"];
+const PUBLIC_TEAM_ROLES = new Set(["Contributor", "Editor", "Maintainer", "Administrator", "Developer", "Owner"]);
 const CATEGORIES = new Set(["LTM", "Ranked", "Top Spenders", "Other Swords", "Explosions"]);
 const DEMANDS = new Set(["Very High", "High", "Medium", "Low", "N/A"]);
 const TRENDS = new Set(["Rising", "Falling", "Stable", "Manipulated", "N/A"]);
+const MEDIA_MIME_MAP = new Map([
+  ["image/webp", { ext: "webp", kind: "image" }],
+  ["image/png", { ext: "png", kind: "image" }],
+  ["image/jpeg", { ext: "jpg", kind: "image" }],
+  ["image/gif", { ext: "gif", kind: "image" }],
+  ["video/mp4", { ext: "mp4", kind: "video" }],
+  ["audio/mpeg", { ext: "mp3", kind: "audio" }],
+  ["audio/mp3", { ext: "mp3", kind: "audio" }],
+  ["audio/ogg", { ext: "ogg", kind: "audio" }],
+  ["audio/wav", { ext: "wav", kind: "audio" }],
+  ["audio/x-wav", { ext: "wav", kind: "audio" }]
+]);
+
+const ROLE_PERMISSIONS = {
+  Viewer: [],
+  Contributor: ["team:view:self"],
+  Editor: ["team:view:self", "sword:update", "media:update"],
+  Maintainer: ["team:view:self", "sword:update", "media:update", "sword:create", "sword:delete"],
+  Administrator: ["team:view:self", "sword:update", "media:update", "sword:create", "sword:delete", "audit:view", "data:export", "data:reset"],
+  Developer: ["team:view:self", "sword:update", "media:update", "sword:create", "sword:delete", "audit:view", "data:export", "data:reset", "audit:revert", "team:manage", "session:revoke", "backup:manage"],
+  Owner: ["team:view:self", "sword:update", "media:update", "sword:create", "sword:delete", "audit:view", "data:export", "data:reset", "audit:revert", "team:manage", "session:revoke", "backup:manage", "owner:all"]
+};
+
+let coreSchemaReadyPromise = null;
 
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
     try {
-      if (url.pathname.startsWith("/api/")) {
+      if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/images/") || url.pathname.startsWith("/media/")) {
         await ensureCoreSchema(env);
+      }
+
+      if ((url.pathname === "/team" || url.pathname === "/team/" || url.pathname === "/team.html") && (request.method === "GET" || request.method === "HEAD")) {
+        return withSecurityHeaders(await handleStaticPageRequest(request, env, "/team.html"));
+      }
+
+      if ((url.pathname === "/privacy" || url.pathname === "/privacy/" || url.pathname === "/privacy.html") && (request.method === "GET" || request.method === "HEAD")) {
+        return withSecurityHeaders(await handleStaticPageRequest(request, env, "/privacy.html"));
+      }
+
+      if ((url.pathname === "/terms" || url.pathname === "/terms/" || url.pathname === "/terms.html") && (request.method === "GET" || request.method === "HEAD")) {
+        return withSecurityHeaders(await handleStaticPageRequest(request, env, "/terms.html"));
       }
 
       if (url.pathname === "/api/auth/status" && request.method === "GET") {
         return withSecurityHeaders(await handleAuthStatus(request, env));
       }
 
-      if (url.pathname === "/api/auth/verify" && request.method === "POST") {
-        return withSecurityHeaders(await handleAuthVerify(request, env));
+      if (url.pathname === "/api/auth/start" && request.method === "GET") {
+        return withSecurityHeaders(await handleAuthStart(request, env, url));
+      }
+
+      if (url.pathname === "/api/auth/callback" && request.method === "GET") {
+        return withSecurityHeaders(await handleAuthCallback(request, env, url));
       }
 
       if (url.pathname === "/api/auth/logout" && request.method === "POST") {
         return withSecurityHeaders(await handleAuthLogout(request, env));
       }
 
-      if (url.pathname === "/api/owner/totp" && request.method === "GET") {
-        return withSecurityHeaders(await requireOwner(request, env, () => handleOwnerTotpGet(env)));
+      if (url.pathname === "/api/v1/health" && request.method === "GET") {
+        return withSecurityHeaders(handlePublicApiHealth());
       }
 
-      if (url.pathname === "/api/owner/totp" && request.method === "POST") {
-        return withSecurityHeaders(await requireOwner(request, env, () => handleOwnerTotpSet(request, env)));
+      if (url.pathname === "/api/v1/swords" && request.method === "GET") {
+        return withSecurityHeaders(await handlePublicApiListSwords(request, env, url));
       }
 
-      if (url.pathname === "/api/owner/images/import" && request.method === "POST") {
-        return withSecurityHeaders(await requireOwner(request, env, () => handleOwnerImageImport(request, env)));
+      if (url.pathname.startsWith("/api/v1/swords/") && request.method === "GET") {
+        return withSecurityHeaders(await handlePublicApiGetSword(request, env, url));
+      }
+
+      if (url.pathname === "/api/v1/team" && request.method === "GET") {
+        return withSecurityHeaders(await handlePublicApiTeam(request, env));
+      }
+
+      if (url.pathname === "/api/v1/health" || url.pathname === "/api/v1/swords" || url.pathname === "/api/v1/team" || url.pathname.startsWith("/api/v1/swords/")) {
+        return withSecurityHeaders(methodNotAllowed(["GET"]));
       }
 
       if (url.pathname === "/api/swords" && request.method === "GET") {
-        return withSecurityHeaders(await handleListSwords(env, url));
+        return withSecurityHeaders(await handleListSwords(request, env, url));
       }
 
       if (url.pathname === "/api/swords" && request.method === "POST") {
-        return withSecurityHeaders(await requireEditor(request, env, () => handleCreateSword(request, env)));
+        return withSecurityHeaders(await requireCapability(request, env, "sword:create", ({ actor }) => handleCreateSword(request, env, actor)));
+      }
+
+      if (url.pathname === "/api/swords") {
+        return withSecurityHeaders(methodNotAllowed(["GET", "POST"]));
       }
 
       if (url.pathname.startsWith("/api/swords/")) {
-        const id = parseSwordId(url.pathname);
+        const id = parseNumericPath(url.pathname, "/api/swords/");
         if (id === null) {
           return withSecurityHeaders(json({ error: "Invalid sword id." }, 400));
         }
 
         if (request.method === "PUT") {
-          return withSecurityHeaders(await requireEditor(request, env, () => handleUpdateSword(request, env, id)));
+          return withSecurityHeaders(await requireCapability(request, env, "sword:update", ({ actor }) => handleUpdateSword(request, env, id, actor)));
         }
 
         if (request.method === "DELETE") {
-          return withSecurityHeaders(await requireEditor(request, env, () => handleDeleteSword(env, id)));
+          return withSecurityHeaders(await requireCapability(request, env, "sword:delete", ({ actor }) => handleDeleteSword(request, env, id, actor)));
         }
+
+        return withSecurityHeaders(methodNotAllowed(["PUT", "DELETE"]));
       }
 
       if (url.pathname === "/api/reset" && request.method === "POST") {
-        return withSecurityHeaders(await requireEditor(request, env, () => handleReset(env)));
+        return withSecurityHeaders(await requireCapability(request, env, "data:reset", ({ actor, session }) => handleReset(request, env, actor, session)));
       }
 
-      if (url.pathname.startsWith("/images/") && request.method === "GET") {
-        return withSecurityHeaders(await handleGetImage(request, env, decodeURIComponent(url.pathname.slice("/images/".length))));
+      if (url.pathname === "/api/export" && request.method === "GET") {
+        return withSecurityHeaders(await requireCapability(request, env, "data:export", ({ actor }) => handleExport(env, actor)));
+      }
+
+      if (url.pathname === "/api/team" && request.method === "GET") {
+        return withSecurityHeaders(await handleListTeam(request, env));
+      }
+
+      if (url.pathname === "/api/team/users" && request.method === "POST") {
+        return withSecurityHeaders(await requireCapability(request, env, "team:manage", ({ actor }) => handleCreateTeamUser(request, env, actor)));
+      }
+
+      if (url.pathname.startsWith("/api/team/users/") && request.method === "PATCH") {
+        const id = parseNumericPath(url.pathname, "/api/team/users/");
+        if (id === null) {
+          return withSecurityHeaders(json({ error: "Invalid team user id." }, 400));
+        }
+        return withSecurityHeaders(await requireCapability(request, env, "team:manage", ({ actor }) => handleUpdateTeamUser(request, env, id, actor)));
+      }
+
+      if (url.pathname === "/api/audit" && request.method === "GET") {
+        return withSecurityHeaders(await requireCapability(request, env, "audit:view", () => handleListAudit(url, env)));
+      }
+
+      if (url.pathname === "/api/audit/revert" && request.method === "POST") {
+        return withSecurityHeaders(await requireCapability(request, env, "audit:revert", ({ actor, session }) => handleAuditRevert(request, env, actor, session)));
+      }
+
+      if ((url.pathname.startsWith("/images/") || url.pathname.startsWith("/media/")) && request.method === "GET") {
+        const prefix = url.pathname.startsWith("/images/") ? "/images/" : "/media/";
+        const key = decodePathSegment(url.pathname.slice(prefix.length), "media key");
+        return withSecurityHeaders(await handleGetMedia(request, env, key));
+      }
+
+      if (url.pathname.startsWith("/api/")) {
+        return withSecurityHeaders(json({ error: "API endpoint not found." }, 404));
       }
 
       if (url.pathname === "/robots.txt" || url.pathname === "/bots.txt") {
@@ -151,7 +249,9 @@ async function handleAssetRequest(request, env) {
       statusText: response.statusText,
       headers
     });
-  } else if (contentType.includes("text/css") || contentType.includes("javascript")) {
+  }
+
+  if (contentType.includes("text/css") || contentType.includes("javascript")) {
     headers.set("cache-control", "public, max-age=3600");
   }
 
@@ -162,48 +262,91 @@ async function handleAssetRequest(request, env) {
   });
 }
 
-async function handleAuthStatus(request, env) {
-  const session = await readSession(request, env);
-  return json({
-    authenticated: Boolean(session)
+async function handleStaticPageRequest(request, env, assetPath) {
+  const assetUrl = new URL(assetPath, request.url);
+  const assetRequest = new Request(assetUrl.toString(), {
+    method: "GET",
+    headers: request.headers
+  });
+  const response = await env.ASSETS.fetch(assetRequest);
+  const headers = new Headers(response.headers);
+  headers.set("content-security-policy", HTML_SECURITY_HEADERS["content-security-policy"]);
+  headers.set("cache-control", "no-store");
+  const html = await response.text();
+  if (request.method === "HEAD") {
+    return new Response(null, {
+      status: response.status,
+      statusText: response.statusText,
+      headers
+    });
+  }
+  return new Response(injectDynamicHeadMarkup(html, request, env), {
+    status: response.status,
+    statusText: response.statusText,
+    headers
   });
 }
 
-async function handleAuthVerify(request, env) {
-  enforceTrustedOrigin(request);
-  enforceAppRequest(request);
-  await consumeRateLimit(env, AUTH_VERIFY_BUCKET, getClientIdentifier(request), 6, 300);
+async function handleAuthStatus(request, env) {
+  const actor = await getActorFromRequest(request, env);
+  return json(buildAuthStatusResponse(actor));
+}
 
-  const body = await request.json().catch(() => null);
-  const code = String(body?.code || "").trim();
-  if (!/^\d{6}$/.test(code)) {
-    throw new HttpError(400, "Enter a valid 6-digit code.");
-  }
-
-  const config = await getTotpConfig(env);
-  if (!config) {
-    throw new HttpError(503, "Admin authenticator is not configured yet.");
-  }
-
-  const valid = await verifyTotpCode(config.secret, code, TOTP_WINDOW_STEPS);
-  if (!valid) {
-    throw new HttpError(401, "Authenticator code is invalid or expired.");
-  }
-
-  const cookie = await issueSessionCookie(request, env);
-  return new Response(JSON.stringify({ authenticated: true }), {
-    status: 200,
+async function handleAuthStart(request, env, url) {
+  await consumeRateLimit(env, AUTH_VERIFY_BUCKET, getClientIdentifier(request), OAUTH_RATE_LIMIT, 300);
+  const purpose = sanitizeOptionalString(url.searchParams.get("purpose"), 32) || "login";
+  const returnTo = sanitizeReturnTo(url.searchParams.get("returnTo"));
+  const state = await buildDiscordAuthorizeUrl(request, env, purpose, returnTo);
+  return new Response(null, {
+    status: 302,
     headers: {
-      ...JSON_HEADERS,
-      "set-cookie": cookie
+      location: state.authorizeUrl,
+      "set-cookie": buildOAuthStateCookie(request, state.nonce, OAUTH_STATE_LIFETIME_SECONDS)
     }
+  });
+}
+
+async function handleAuthCallback(request, env, url) {
+  await consumeRateLimit(env, AUTH_VERIFY_BUCKET, getClientIdentifier(request), OAUTH_RATE_LIMIT, 300);
+  const error = url.searchParams.get("error");
+  if (error) {
+    return Response.redirect(new URL("/?login=cancelled", request.url), 302);
+  }
+
+  const code = url.searchParams.get("code");
+  const stateToken = url.searchParams.get("state");
+  if (!code || !stateToken) {
+    throw new HttpError(400, "Missing Discord login state.");
+  }
+
+  const state = await verifySignedToken(env, stateToken, "oauth");
+  const cookies = parseCookies(request.headers.get("cookie") || "");
+  if (!state || !state.nonce || !timingSafeEqual(cookies[OAUTH_STATE_COOKIE] || "", state.nonce)) {
+    throw new HttpError(400, "Discord login state is invalid or expired.");
+  }
+  const tokenResponse = await exchangeDiscordCode(env, code);
+  const discordUser = await fetchDiscordIdentity(tokenResponse.access_token);
+  const user = await upsertDiscordUser(env, discordUser);
+  const cookie = await issueSessionCookie(request, env, {
+    userId: user.id,
+    purpose: state.purpose || "login",
+    returnTo: state.returnTo || "/"
+  });
+
+  const redirectUrl = new URL(state.returnTo || "/", request.url);
+  redirectUrl.searchParams.set("login", state.purpose === "login" ? "success" : "reauth-success");
+  const headers = new Headers({ location: redirectUrl.toString() });
+  headers.append("set-cookie", cookie);
+  headers.append("set-cookie", buildOAuthStateCookie(request, "", 0));
+  return new Response(null, {
+    status: 302,
+    headers
   });
 }
 
 async function handleAuthLogout(request, env) {
   enforceTrustedOrigin(request);
   enforceAppRequest(request);
-
   return new Response(JSON.stringify({ authenticated: false }), {
     status: 200,
     headers: {
@@ -213,81 +356,8 @@ async function handleAuthLogout(request, env) {
   });
 }
 
-async function handleOwnerTotpGet(env) {
-  const config = await getTotpConfig(env);
-  const issuer = config?.issuer || env.ADMIN_TOTP_DEFAULT_ISSUER || "BBTSL Blade Ball Value List";
-  const accountLabel = config?.accountLabel || env.ADMIN_TOTP_DEFAULT_ACCOUNT || "bbtsl-admin";
-
-  if (!config) {
-    return json({
-      configured: false,
-      issuer,
-      accountLabel
-    });
-  }
-
-  return json(buildTotpStatusResponse(config));
-}
-
-async function handleOwnerTotpSet(request, env) {
-  const body = await request.json().catch(() => ({}));
-  const issuer = sanitizeOptionalString(body.issuer || env.ADMIN_TOTP_DEFAULT_ISSUER || "BBTSL Blade Ball Value List", 120) || "BBTSL Blade Ball Value List";
-  const accountLabel = sanitizeOptionalString(body.accountLabel || env.ADMIN_TOTP_DEFAULT_ACCOUNT || "bbtsl-admin", 120) || "bbtsl-admin";
-  const secret = body.secret
-    ? normalizeBase32Secret(body.secret)
-    : generateTotpSecret();
-
-  const config = {
-    secret,
-    issuer,
-    accountLabel,
-    digits: TOTP_DIGITS,
-    period: TOTP_PERIOD_SECONDS,
-    updatedAt: currentIsoString()
-  };
-
-  await env.DB.prepare(`
-    INSERT INTO admin_config (config_key, secret, issuer, account_label, digits, period, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(config_key) DO UPDATE SET
-      secret = excluded.secret,
-      issuer = excluded.issuer,
-      account_label = excluded.account_label,
-      digits = excluded.digits,
-      period = excluded.period,
-      updated_at = excluded.updated_at
-  `).bind(
-    TOTP_CONFIG_KEY,
-    config.secret,
-    config.issuer,
-    config.accountLabel,
-    config.digits,
-    config.period,
-    config.updatedAt
-  ).run();
-
-  return json(buildTotpProvisioningResponse(config));
-}
-
-async function handleOwnerImageImport(request, env) {
-  const body = await request.json().catch(() => null);
-  const items = Array.isArray(body?.items)
-    ? body.items
-    : [{ key: body?.key, dataUrl: body?.dataUrl }];
-
-  if (items.length === 0) {
-    throw new HttpError(400, "At least one image import item is required.");
-  }
-
-  for (const item of items) {
-    const imageKey = requireImageKey(item?.key);
-    await importImageRecord(env, imageKey, item?.dataUrl);
-  }
-
-  return json({ ok: true, imported: items.length });
-}
-
-async function handleListSwords(env, url) {
+async function handleListSwords(request, env, url) {
+  const actor = await getActorFromRequest(request, env);
   const category = url.searchParams.get("category");
   const search = (url.searchParams.get("search") || "").trim().toLowerCase();
   const sort = url.searchParams.get("sort") || "value-desc";
@@ -307,27 +377,90 @@ async function handleListSwords(env, url) {
   }
 
   const sql = `
-    SELECT id, n, c, v, d, t, ct, u, descr, image_key, edited
+    SELECT id, card_id, n, c, v, d, t, ct, u, descr, image_key, detail_image_key, slash_media_key, slash_audio_key, edited
     FROM swords
     ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
     ${sortSql}
   `;
 
   const { results } = await env.DB.prepare(sql).bind(...bindings).all();
+  const mediaMap = await loadMediaDescriptorMap(env, collectSwordMediaKeys(results || []));
   return json({
-    swords: (results || []).map((row) => serializeSword(row))
+    swords: (results || []).map((row) => serializeSword(row, mediaMap)),
+    auth: buildAuthStatusResponse(actor)
   });
 }
 
-async function handleCreateSword(request, env) {
-  const payload = normalizePayload(await request.json());
-  const image = payload.img !== undefined ? await persistImage(env, payload.img, null, payload.n) : { imageKey: null };
+function handlePublicApiHealth() {
+  return publicApiJson({
+    ok: true,
+    version: "v1"
+  });
+}
 
+async function handlePublicApiListSwords(request, env, url) {
+  await consumeRateLimit(env, PUBLIC_API_BUCKET, getClientIdentifier(request), 120, 60);
+  const query = parsePublicSwordQuery(url);
+  const { results } = await env.DB.prepare(`
+    SELECT id, card_id, n, c, v, d, t, ct, u, descr, image_key, detail_image_key, slash_media_key, slash_audio_key, edited
+    FROM swords
+    ${query.where.length ? `WHERE ${query.where.join(" AND ")}` : ""}
+    ${query.sortSql}
+    LIMIT ? OFFSET ?
+  `).bind(...query.bindings, query.limit, query.offset).all();
+  const totalRow = await env.DB.prepare(`
+    SELECT COUNT(*) AS total
+    FROM swords
+    ${query.where.length ? `WHERE ${query.where.join(" AND ")}` : ""}
+  `).bind(...query.bindings).first();
+  const rows = results || [];
+  const mediaMap = await loadMediaDescriptorMap(env, collectSwordMediaKeys(rows));
+  return publicApiJson({
+    data: rows.map((row) => serializeSword(row, mediaMap)),
+    meta: {
+      total: Number(totalRow?.total || 0),
+      limit: query.limit,
+      offset: query.offset
+    }
+  });
+}
+
+async function handlePublicApiGetSword(request, env, url) {
+  await consumeRateLimit(env, PUBLIC_API_BUCKET, getClientIdentifier(request), 120, 60);
+  const cardId = parseCardIdPath(url.pathname, "/api/v1/swords/");
+  const row = await getSwordByCardId(env, cardId);
+  if (!row) {
+    throw new HttpError(404, "Sword not found.");
+  }
+  const mediaMap = await loadMediaDescriptorMap(env, collectSwordMediaKeys([row]));
+  return publicApiJson({ data: serializeSword(row, mediaMap) });
+}
+
+async function handlePublicApiTeam(request, env) {
+  await consumeRateLimit(env, PUBLIC_API_BUCKET, getClientIdentifier(request), 120, 60);
+  const { results } = await env.DB.prepare(`
+    SELECT id, discord_user_id, username, global_name, avatar_hash, role, status, created_at, updated_at, last_login_at
+    FROM users
+    WHERE status = 'active' AND role IN (?, ?, ?, ?, ?, ?)
+    ORDER BY role_sort DESC, updated_at DESC, id ASC
+  `).bind(...PUBLIC_TEAM_ROLES).all();
+  return publicApiJson({ data: (results || []).map((row) => serializePublicTeamUser(row)) });
+}
+
+async function handleCreateSword(request, env, actor) {
+  const payload = normalizeSwordPayload(await request.json(), actor);
+  const image = payload.img !== undefined ? await persistMedia(env, payload.img, payload.n, "card-image") : { mediaKey: null };
+  const detailMedia = payload.detailMedia !== undefined ? await persistMedia(env, payload.detailMedia, payload.n, "detail") : { mediaKey: null };
+  const slashMedia = payload.slashMedia !== undefined ? await persistMedia(env, payload.slashMedia, payload.n, "slash") : { mediaKey: null };
+  const slashAudio = payload.slashAudio !== undefined ? await persistMedia(env, payload.slashAudio, payload.n, "slash-audio") : { mediaKey: null };
+  const cardId = await generateUniqueCardId(env);
   const now = currentDateString();
+
   const result = await env.DB.prepare(`
-    INSERT INTO swords (n, c, v, d, t, ct, u, descr, image_key, edited)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+    INSERT INTO swords (card_id, n, c, v, d, t, ct, u, descr, image_key, detail_image_key, slash_media_key, slash_audio_key, edited)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
   `).bind(
+    cardId,
     payload.n,
     payload.c,
     payload.v,
@@ -336,37 +469,43 @@ async function handleCreateSword(request, env) {
     payload.ct,
     now,
     payload.descr,
-    image.imageKey
+    image.mediaKey,
+    detailMedia.mediaKey,
+    slashMedia.mediaKey,
+    slashAudio.mediaKey
   ).run();
 
-  const created = await env.DB.prepare(`
-    SELECT id, n, c, v, d, t, ct, u, descr, image_key, edited
-    FROM swords
-    WHERE id = ?
-  `).bind(result.meta.last_row_id).first();
+  const created = await getSwordById(env, Number(result.meta.last_row_id));
+  await writeAuditLog(env, {
+    actor,
+    actionType: "sword.create",
+    entityType: "sword",
+    entityId: created.id,
+    entityPublicId: created.card_id,
+    summary: `Created ${created.n}`,
+    beforeSnapshot: null,
+    afterSnapshot: created
+  });
 
   return json({ sword: serializeSword(created) }, 201);
 }
 
-async function handleUpdateSword(request, env, id) {
-  const existing = await env.DB.prepare(`
-    SELECT id, n, c, v, d, t, ct, u, descr, image_key, edited
-    FROM swords
-    WHERE id = ?
-  `).bind(id).first();
-
+async function handleUpdateSword(request, env, id, actor) {
+  const existing = await getSwordById(env, id);
   if (!existing) {
     throw new HttpError(404, "Sword not found.");
   }
 
-  const payload = normalizePayload(await request.json());
-  const image = payload.img !== undefined
-    ? await persistImage(env, payload.img, existing.image_key, payload.n)
-    : { imageKey: existing.image_key };
+  const payload = normalizeSwordPayload(await request.json(), actor);
+  const image = payload.img !== undefined ? await persistMedia(env, payload.img, payload.n, "card-image") : { mediaKey: existing.image_key };
+  const detailMedia = payload.detailMedia !== undefined ? await persistMedia(env, payload.detailMedia, payload.n, "detail") : { mediaKey: existing.detail_image_key };
+  const slashMedia = payload.slashMedia !== undefined ? await persistMedia(env, payload.slashMedia, payload.n, "slash") : { mediaKey: existing.slash_media_key };
+  const slashAudio = payload.slashAudio !== undefined ? await persistMedia(env, payload.slashAudio, payload.n, "slash-audio") : { mediaKey: existing.slash_audio_key };
+  const beforeSnapshot = serializeSword(existing);
 
   await env.DB.prepare(`
     UPDATE swords
-    SET n = ?, c = ?, v = ?, d = ?, t = ?, ct = ?, u = ?, descr = ?, image_key = ?, edited = 1
+    SET n = ?, c = ?, v = ?, d = ?, t = ?, ct = ?, u = ?, descr = ?, image_key = ?, detail_image_key = ?, slash_media_key = ?, slash_audio_key = ?, edited = 1
     WHERE id = ?
   `).bind(
     payload.n,
@@ -377,63 +516,366 @@ async function handleUpdateSword(request, env, id) {
     payload.ct,
     currentDateString(),
     payload.descr,
-    image.imageKey,
+    image.mediaKey,
+    detailMedia.mediaKey,
+    slashMedia.mediaKey,
+    slashAudio.mediaKey,
     id
   ).run();
 
-  const updated = await env.DB.prepare(`
-    SELECT id, n, c, v, d, t, ct, u, descr, image_key, edited
-    FROM swords
-    WHERE id = ?
-  `).bind(id).first();
+  const updated = await getSwordById(env, id);
+  await writeAuditLog(env, {
+    actor,
+    actionType: "sword.update",
+    entityType: "sword",
+    entityId: updated.id,
+    entityPublicId: updated.card_id,
+    summary: `Updated ${updated.n}`,
+    beforeSnapshot,
+    afterSnapshot: serializeSword(updated)
+  });
 
   return json({ sword: serializeSword(updated) });
 }
 
-async function handleDeleteSword(env, id) {
-  const existing = await env.DB.prepare("SELECT image_key FROM swords WHERE id = ?").bind(id).first();
+async function handleDeleteSword(request, env, id, actor) {
+  enforceTrustedOrigin(request);
+  enforceAppRequest(request);
+  const existing = await getSwordById(env, id);
   if (!existing) {
     throw new HttpError(404, "Sword not found.");
   }
 
   await env.DB.prepare("DELETE FROM swords WHERE id = ?").bind(id).run();
+  await writeAuditLog(env, {
+    actor,
+    actionType: "sword.delete",
+    entityType: "sword",
+    entityId: existing.id,
+    entityPublicId: existing.card_id,
+    summary: `Deleted ${existing.n}`,
+    beforeSnapshot: serializeSword(existing),
+    afterSnapshot: null
+  });
+
   return json({ ok: true });
 }
 
-async function handleReset(env) {
+async function handleReset(request, env, actor, session) {
+  enforceTrustedOrigin(request);
+  enforceAppRequest(request);
+  const body = await request.json().catch(() => ({}));
+  if (String(body.confirmation || "").trim() !== "I confirm the Reset") {
+    throw new HttpError(400, "Reset confirmation phrase is invalid.");
+  }
+  requireFreshReauth(session);
+
+  const beforeRows = await env.DB.prepare(`
+    SELECT id, card_id, n, c, v, d, t, ct, u, descr, image_key, detail_image_key, slash_media_key, slash_audio_key, edited
+    FROM swords
+    ORDER BY id ASC
+  `).all();
+
   await env.DB.batch([
     env.DB.prepare("DELETE FROM swords"),
     env.DB.prepare(`
-      INSERT INTO swords (id, n, c, v, d, t, ct, u, descr, image_key, edited)
-      SELECT id, n, c, v, d, t, ct, u, descr, image_key, edited
+      INSERT INTO swords (id, card_id, n, c, v, d, t, ct, u, descr, image_key, detail_image_key, slash_media_key, slash_audio_key, edited)
+      SELECT id, card_id, n, c, v, d, t, ct, u, descr, image_key, detail_image_key, slash_media_key, slash_audio_key, edited
       FROM sword_baseline
-      ORDER BY v DESC, id ASC
+      ORDER BY id ASC
     `)
   ]);
 
-  const { results } = await env.DB.prepare(`
-    SELECT id, n, c, v, d, t, ct, u, descr, image_key, edited
+  const afterRows = await env.DB.prepare(`
+    SELECT id, card_id, n, c, v, d, t, ct, u, descr, image_key, detail_image_key, slash_media_key, slash_audio_key, edited
     FROM swords
-    ORDER BY v DESC, id ASC
+    ORDER BY id ASC
   `).all();
+
+  await writeAuditLog(env, {
+    actor,
+    actionType: "data.reset",
+    entityType: "collection",
+    entityId: null,
+    entityPublicId: null,
+    summary: "Reset swords to baseline",
+    beforeSnapshot: (beforeRows.results || []).map(serializeSword),
+    afterSnapshot: (afterRows.results || []).map(serializeSword)
+  });
 
   return json({
     ok: true,
-    swords: (results || []).map((row) => serializeSword(row))
+    swords: (afterRows.results || []).map((row) => serializeSword(row))
   });
 }
 
-async function handleGetImage(request, env, key) {
+async function handleExport(env, actor) {
+  const { results } = await env.DB.prepare(`
+    SELECT id, card_id, n, c, v, d, t, ct, u, descr, image_key, detail_image_key, slash_media_key, slash_audio_key, edited
+    FROM swords
+    ORDER BY v DESC, id ASC
+  `).all();
+  await writeAuditLog(env, {
+    actor,
+    actionType: "data.export",
+    entityType: "collection",
+    entityId: null,
+    entityPublicId: null,
+    summary: "Exported sword data",
+    beforeSnapshot: null,
+    afterSnapshot: { count: Number((results || []).length) }
+  });
+  return json({ swords: (results || []).map((row) => serializeSword(row)) });
+}
+
+async function handleListTeam(request, env) {
+  const actor = await getActorFromRequest(request, env);
+  const includeAll = hasCapability(actor?.user?.role, "team:manage");
+  const sql = includeAll
+    ? "SELECT id, discord_user_id, username, global_name, avatar_hash, role, status, created_at, updated_at, last_login_at FROM users ORDER BY role_sort DESC, updated_at DESC, id ASC"
+    : "SELECT id, discord_user_id, username, global_name, avatar_hash, role, status, created_at, updated_at, last_login_at FROM users WHERE status = 'active' AND role IN (?, ?, ?, ?, ?, ?) ORDER BY role_sort DESC, updated_at DESC, id ASC";
+  const bindings = includeAll ? [] : [...PUBLIC_TEAM_ROLES];
+  const { results } = await env.DB.prepare(sql).bind(...bindings).all();
+  return json({
+    team: (results || []).map((row) => includeAll ? serializeTeamUser(row) : serializePublicTeamUser(row)),
+    auth: buildAuthStatusResponse(actor)
+  });
+}
+
+async function handleCreateTeamUser(request, env, actor) {
+  enforceTrustedOrigin(request);
+  enforceAppRequest(request);
+  const body = await request.json().catch(() => ({}));
+  const discordUserId = sanitizeDiscordId(body.discordUserId);
+  const role = requireRole(body.role);
+  const username = sanitizeOptionalString(body.username, 100);
+  const globalName = sanitizeOptionalString(body.globalName, 100);
+  const avatarHash = sanitizeOptionalString(body.avatarHash, 128);
+
+  const existing = await env.DB.prepare("SELECT id FROM users WHERE discord_user_id = ?").bind(discordUserId).first();
+  if (existing) {
+    throw new HttpError(409, "A team member with that Discord user ID already exists.");
+  }
+
+  await env.DB.prepare(`
+    INSERT INTO users (discord_user_id, username, global_name, avatar_hash, role, role_sort, status, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)
+  `).bind(
+    discordUserId,
+    username,
+    globalName,
+    avatarHash,
+    role,
+    getRoleSort(role),
+    currentIsoString(),
+    currentIsoString()
+  ).run();
+
+  const created = await env.DB.prepare("SELECT id, discord_user_id, username, global_name, avatar_hash, role, status, created_at, updated_at, last_login_at FROM users WHERE discord_user_id = ?").bind(discordUserId).first();
+  await writeAuditLog(env, {
+    actor,
+    actionType: "team.user.create",
+    entityType: "user",
+    entityId: created.id,
+    entityPublicId: created.discord_user_id,
+    summary: `Created team user ${created.username || created.global_name || created.discord_user_id}`,
+    beforeSnapshot: null,
+    afterSnapshot: serializeTeamUser(created)
+  });
+
+  return json({ user: serializeTeamUser(created) }, 201);
+}
+
+async function handleUpdateTeamUser(request, env, id, actor) {
+  enforceTrustedOrigin(request);
+  enforceAppRequest(request);
+  const existing = await env.DB.prepare("SELECT id, discord_user_id, username, global_name, avatar_hash, role, status, created_at, updated_at, last_login_at FROM users WHERE id = ?").bind(id).first();
+  if (!existing) {
+    throw new HttpError(404, "Team user not found.");
+  }
+
+  const body = await request.json().catch(() => ({}));
+  const role = body.role !== undefined ? requireRole(body.role) : existing.role;
+  const username = body.username !== undefined ? sanitizeOptionalString(body.username, 100) : existing.username;
+  const globalName = body.globalName !== undefined ? sanitizeOptionalString(body.globalName, 100) : existing.global_name;
+  const avatarHash = body.avatarHash !== undefined ? sanitizeOptionalString(body.avatarHash, 128) : existing.avatar_hash;
+  const status = body.status !== undefined ? requireStatus(body.status) : existing.status;
+  const beforeSnapshot = serializeTeamUser(existing);
+
+  await env.DB.prepare(`
+    UPDATE users
+    SET username = ?, global_name = ?, avatar_hash = ?, role = ?, role_sort = ?, status = ?, updated_at = ?
+    WHERE id = ?
+  `).bind(
+    username,
+    globalName,
+    avatarHash,
+    role,
+    getRoleSort(role),
+    status,
+    currentIsoString(),
+    id
+  ).run();
+
+  const updated = await env.DB.prepare("SELECT id, discord_user_id, username, global_name, avatar_hash, role, status, created_at, updated_at, last_login_at FROM users WHERE id = ?").bind(id).first();
+  await writeAuditLog(env, {
+    actor,
+    actionType: "team.user.update",
+    entityType: "user",
+    entityId: updated.id,
+    entityPublicId: updated.discord_user_id,
+    summary: `Updated team user ${updated.username || updated.global_name || updated.discord_user_id}`,
+    beforeSnapshot,
+    afterSnapshot: serializeTeamUser(updated)
+  });
+
+  return json({ user: serializeTeamUser(updated) });
+}
+
+async function handleListAudit(url, env) {
+  const filters = [];
+  const bindings = [];
+
+  const entityPublicId = sanitizeOptionalString(url.searchParams.get("cardId"), 16);
+  if (entityPublicId) {
+    filters.push("entity_public_id = ?");
+    bindings.push(entityPublicId);
+  }
+
+  const actorUserId = url.searchParams.get("actorUserId");
+  if (actorUserId && /^\d+$/.test(actorUserId)) {
+    filters.push("actor_user_id = ?");
+    bindings.push(Number(actorUserId));
+  }
+
+  const actionType = sanitizeOptionalString(url.searchParams.get("actionType"), 80);
+  if (actionType) {
+    filters.push("action_type = ?");
+    bindings.push(actionType);
+  }
+
+  const role = sanitizeOptionalString(url.searchParams.get("role"), 32);
+  if (role) {
+    filters.push("actor_role = ?");
+    bindings.push(role);
+  }
+
+  const search = sanitizeOptionalString(url.searchParams.get("search"), 120);
+  if (search) {
+    filters.push("(summary LIKE ? OR diff_json LIKE ?)");
+    bindings.push(`%${search}%`, `%${search}%`);
+  }
+
+  const sql = `
+    SELECT
+      audit_logs.id,
+      audit_logs.actor_user_id,
+      audit_logs.actor_role,
+      audit_logs.action_type,
+      audit_logs.entity_type,
+      audit_logs.entity_id,
+      audit_logs.entity_public_id,
+      audit_logs.summary,
+      audit_logs.diff_json,
+      audit_logs.before_json,
+      audit_logs.after_json,
+      audit_logs.created_at,
+      users.username AS actor_username,
+      users.global_name AS actor_global_name
+    FROM audit_logs
+    LEFT JOIN users ON users.id = audit_logs.actor_user_id
+      ${filters.length ? `WHERE ${filters.join(" AND ")}` : ""}
+    ORDER BY audit_logs.created_at DESC, audit_logs.id DESC
+    LIMIT 250
+  `;
+  const { results } = await env.DB.prepare(sql).bind(...bindings).all();
+  return json({ logs: (results || []).map(serializeAuditLog) });
+}
+
+async function handleAuditRevert(request, env, actor, session) {
+  enforceTrustedOrigin(request);
+  enforceAppRequest(request);
+  requireFreshReauth(session);
+
+  const body = await request.json().catch(() => ({}));
+  if (String(body.confirmation || "").trim() !== "I confirm the revert") {
+    throw new HttpError(400, "Revert confirmation phrase is invalid.");
+  }
+
+  const logId = clampInteger(body.logId, 1, Number.MAX_SAFE_INTEGER, "Audit log");
+  const mode = body.mode === "field" ? "field" : "snapshot";
+  const fieldName = sanitizeOptionalString(body.fieldName, 64);
+  const row = await env.DB.prepare(`
+    SELECT id, action_type, entity_id, entity_public_id, before_json, after_json
+    FROM audit_logs
+    WHERE id = ?
+  `).bind(logId).first();
+  if (!row) {
+    throw new HttpError(404, "Audit log not found.");
+  }
+
+  if (!String(row.action_type || "").startsWith("sword.")) {
+    throw new HttpError(400, "Only sword-related audit entries can be reverted right now.");
+  }
+
+  const beforeSnapshot = parseJsonField(row.before_json);
+  const current = row.entity_id ? await getSwordById(env, Number(row.entity_id)) : null;
+  if (!current && !beforeSnapshot) {
+    throw new HttpError(400, "This audit entry cannot be reverted.");
+  }
+
+  if (mode === "field") {
+    if (!fieldName) {
+      throw new HttpError(400, "A field name is required for field reverts.");
+    }
+    if (!beforeSnapshot || !Object.prototype.hasOwnProperty.call(beforeSnapshot, fieldName)) {
+      throw new HttpError(400, "The selected field is not available in that audit entry.");
+    }
+    const payload = swordPayloadFromSnapshot(serializeSword(current || beforeSnapshot));
+    payload[fieldName] = beforeSnapshot[fieldName];
+    await applySwordSnapshotUpdate(env, current?.id || beforeSnapshot.id, payload);
+  } else {
+    if (!beforeSnapshot) {
+      throw new HttpError(400, "This audit entry does not contain a snapshot to restore.");
+    }
+    await restoreSwordSnapshot(env, beforeSnapshot);
+  }
+
+  const updated = await getSwordById(env, Number(row.entity_id));
+  await writeAuditLog(env, {
+    actor,
+    actionType: "audit.revert",
+    entityType: "sword",
+    entityId: updated?.id || Number(row.entity_id),
+    entityPublicId: updated?.card_id || row.entity_public_id,
+    summary: `Reverted audit log #${logId}`,
+    beforeSnapshot: current ? serializeSword(current) : null,
+    afterSnapshot: updated ? serializeSword(updated) : beforeSnapshot
+  });
+
+  return json({ ok: true, sword: updated ? serializeSword(updated) : null });
+}
+
+async function handleGetMedia(request, env, key) {
   if (!key) {
-    throw new HttpError(400, "Missing image key.");
+    throw new HttpError(400, "Missing media key.");
   }
 
   if (key === "unavailable.webp") {
     return env.ASSETS.fetch(new Request(new URL("/images/unavailable.webp", request.url), request));
   }
 
+  const cache = caches.default;
+  const cacheUrl = new URL(request.url);
+  cacheUrl.search = "";
+  const cacheKey = new Request(cacheUrl.toString(), { method: "GET" });
+  const cachedResponse = await cache.match(cacheKey);
+  if (cachedResponse) {
+    return cachedResponse;
+  }
+
   const row = await env.DB.prepare(`
-    SELECT content_type, length(image_data) AS image_size
+    SELECT content_type, length(image_data) AS media_size
     FROM sword_images
     WHERE image_key = ?
   `).bind(key).first();
@@ -442,23 +884,22 @@ async function handleGetImage(request, env, key) {
     return env.ASSETS.fetch(new Request(new URL("/images/unavailable.webp", request.url), request));
   }
 
-  const imageSize = Number(row.image_size || 0);
-  let imageBody = null;
-  if (imageSize > 0 && imageSize <= DIRECT_IMAGE_READ_LIMIT) {
+  const mediaSize = Number(row.media_size || 0);
+  let mediaBody = null;
+  if (mediaSize > 0 && mediaSize <= DIRECT_MEDIA_READ_LIMIT) {
     const bodyRow = await env.DB.prepare(`
       SELECT image_data
       FROM sword_images
       WHERE image_key = ?
     `).bind(key).first();
-
-    imageBody = await readImageBody(bodyRow?.image_data);
+    mediaBody = await readMediaBody(bodyRow?.image_data);
   }
 
-  if (!imageBody?.byteLength) {
-    imageBody = await readImageBodyFromChunks(env, key, imageSize);
+  if (!mediaBody?.byteLength) {
+    mediaBody = await readMediaBodyFromChunks(env, key, mediaSize);
   }
 
-  if (!imageBody?.byteLength) {
+  if (!mediaBody?.byteLength) {
     return env.ASSETS.fetch(new Request(new URL("/images/unavailable.webp", request.url), request));
   }
 
@@ -468,67 +909,49 @@ async function handleGetImage(request, env, key) {
   headers.set("cache-control", "public, max-age=31536000, immutable");
   headers.set("x-content-type-options", HTML_SECURITY_HEADERS["x-content-type-options"]);
   if (contentType === "image/svg+xml" || key.toLowerCase().endsWith(".svg")) {
-    headers.set("content-disposition", `attachment; filename="${key.split("/").pop() || "image.svg"}"`);
+    headers.set("content-disposition", `attachment; filename="${key.split("/").pop() || "media.svg"}"`);
     headers.set("content-security-policy", "default-src 'none'; sandbox");
   }
-  return new Response(imageBody, { headers });
+  const response = new Response(mediaBody, { headers });
+  await cache.put(cacheKey, response.clone());
+  return response;
 }
 
-async function requireEditor(request, env, fn) {
-  enforceTrustedOrigin(request);
-  enforceAppRequest(request);
-  await consumeRateLimit(env, ADMIN_MUTATION_BUCKET, getClientIdentifier(request), 60, 300);
+async function requireCapability(request, env, capability, fn) {
+  if (request.method !== "GET") {
+    enforceTrustedOrigin(request);
+    enforceAppRequest(request);
+    await consumeRateLimit(env, ADMIN_MUTATION_BUCKET, getClientIdentifier(request), 60, 300);
+  }
 
+  const actor = await getActorFromRequest(request, env);
+  if (!actor?.user) {
+    throw new HttpError(401, "Sign in with Discord to continue.");
+  }
+  if (!hasCapability(actor.user.role, capability)) {
+    throw new HttpError(403, "You do not have permission to perform this action.");
+  }
+
+  return fn({ actor, session: actor.session, user: actor.user });
+}
+
+async function getActorFromRequest(request, env) {
   const session = await readSession(request, env);
   if (!session) {
-    throw new HttpError(401, "Admin verification required.");
+    return null;
   }
 
-  return fn();
-}
+  const user = await env.DB.prepare(`
+    SELECT id, discord_user_id, username, global_name, avatar_hash, role, status, created_at, updated_at, last_login_at
+    FROM users
+    WHERE id = ?
+  `).bind(session.userId).first();
 
-async function requireOwner(request, env, fn) {
-  const configured = (env.OWNER_API_KEY || "").trim();
-  const provided = (request.headers.get(OWNER_HEADER) || "").trim();
-  if (!configured || provided !== configured) {
-    throw new HttpError(403, "Owner key is invalid.");
+  if (!user || user.status === "disabled") {
+    return null;
   }
 
-  await consumeRateLimit(env, OWNER_BUCKET, getClientIdentifier(request), 20, 600);
-  return fn();
-}
-
-function enforceTrustedOrigin(request) {
-  const url = new URL(request.url);
-  const origin = request.headers.get("origin");
-  if (!origin) {
-    const referer = request.headers.get("referer");
-    if (!referer) {
-      throw new HttpError(403, "Missing same-origin context.");
-    }
-
-    let refererUrl;
-    try {
-      refererUrl = new URL(referer);
-    } catch {
-      throw new HttpError(403, "Invalid same-origin context.");
-    }
-
-    if (refererUrl.origin !== url.origin) {
-      throw new HttpError(403, "Cross-origin requests are not allowed.");
-    }
-    return;
-  }
-
-  if (origin !== url.origin) {
-    throw new HttpError(403, "Cross-origin requests are not allowed.");
-  }
-}
-
-function enforceAppRequest(request) {
-  if (request.headers.get(APP_REQUEST_HEADER) !== "1") {
-    throw new HttpError(403, "Invalid admin request.");
-  }
+  return { session, user: normalizeUserRow(user) };
 }
 
 async function readSession(request, env) {
@@ -538,7 +961,181 @@ async function readSession(request, env) {
     return null;
   }
 
-  const parts = raw.split(".");
+  const payload = await verifySignedToken(env, raw, "session");
+  if (!payload || typeof payload.uid !== "number") {
+    return null;
+  }
+
+  return {
+    userId: payload.uid,
+    exp: payload.exp,
+    iat: payload.iat,
+    reauthAt: payload.reauthAt || payload.iat || 0
+  };
+}
+
+async function issueSessionCookie(request, env, options) {
+  const now = Math.floor(Date.now() / 1000);
+  const reauthAt = options.purpose === "reauth" ? now : (options.existingReauthAt || now);
+  const token = await signToken(env, {
+    scope: "session",
+    uid: Number(options.userId),
+    iat: now,
+    exp: now + SESSION_LIFETIME_SECONDS,
+    reauthAt
+  });
+  return buildSessionCookie(request, token, SESSION_LIFETIME_SECONDS);
+}
+
+function requireFreshReauth(session) {
+  const now = Math.floor(Date.now() / 1000);
+  if (!session?.reauthAt || (now - Number(session.reauthAt)) > REAUTH_WINDOW_SECONDS) {
+    throw new HttpError(403, "Discord re-authentication is required before continuing.");
+  }
+}
+
+function buildAuthStatusResponse(actor) {
+  if (!actor?.user) {
+    return {
+      authenticated: false,
+      user: null,
+      permissions: [],
+      reauthFresh: false
+    };
+  }
+
+  return {
+    authenticated: true,
+    user: serializeTeamUser(actor.user),
+    permissions: [...getPermissionsForRole(actor.user.role)],
+    reauthFresh: Boolean(actor.session?.reauthAt && ((Math.floor(Date.now() / 1000) - Number(actor.session.reauthAt)) <= REAUTH_WINDOW_SECONDS))
+  };
+}
+
+async function buildDiscordAuthorizeUrl(request, env, purpose, returnTo) {
+  const clientId = requireEnv(env, "DISCORD_CLIENT_ID");
+  const redirectUri = getDiscordRedirectUri(env);
+  const base = new URL("https://discord.com/oauth2/authorize");
+  const nonce = createRandomToken();
+  const stateToken = await signToken(env, {
+    scope: "oauth",
+    purpose,
+    returnTo,
+    nonce,
+    iat: Math.floor(Date.now() / 1000),
+    exp: Math.floor(Date.now() / 1000) + OAUTH_STATE_LIFETIME_SECONDS
+  });
+  base.searchParams.set("client_id", clientId);
+  base.searchParams.set("response_type", "code");
+  base.searchParams.set("redirect_uri", redirectUri);
+  base.searchParams.set("scope", "identify");
+  base.searchParams.set("prompt", "consent");
+  base.searchParams.set("state", stateToken);
+  return {
+    authorizeUrl: base.toString(),
+    nonce
+  };
+}
+
+async function exchangeDiscordCode(env, code) {
+  const redirectUri = getDiscordRedirectUri(env);
+  const response = await fetch("https://discord.com/api/oauth2/token", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: requireEnv(env, "DISCORD_CLIENT_ID"),
+      client_secret: requireEnv(env, "DISCORD_CLIENT_SECRET"),
+      grant_type: "authorization_code",
+      code,
+      redirect_uri: redirectUri
+    })
+  });
+
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok || !body.access_token) {
+    throw new HttpError(502, "Discord OAuth exchange failed.");
+  }
+  return body;
+}
+
+async function fetchDiscordIdentity(accessToken) {
+  const response = await fetch("https://discord.com/api/users/@me", {
+    headers: { authorization: `Bearer ${accessToken}` }
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok || !body.id) {
+    throw new HttpError(502, "Could not load Discord identity.");
+  }
+  return body;
+}
+
+async function upsertDiscordUser(env, discordUser) {
+  const now = currentIsoString();
+  const existing = await env.DB.prepare(`
+    SELECT id, role
+    FROM users
+    WHERE discord_user_id = ?
+  `).bind(String(discordUser.id)).first();
+
+  if (!existing) {
+    const role = "Viewer";
+    await env.DB.prepare(`
+      INSERT INTO users (discord_user_id, username, global_name, avatar_hash, role, role_sort, status, created_at, updated_at, last_login_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
+    `).bind(
+      String(discordUser.id),
+      sanitizeOptionalString(discordUser.username, 100),
+      sanitizeOptionalString(discordUser.global_name || discordUser.display_name, 100),
+      sanitizeOptionalString(discordUser.avatar, 128),
+      role,
+      getRoleSort(role),
+      now,
+      now,
+      now
+    ).run();
+  } else {
+    await env.DB.prepare(`
+      UPDATE users
+      SET username = ?, global_name = ?, avatar_hash = ?, updated_at = ?, last_login_at = ?
+      WHERE discord_user_id = ?
+    `).bind(
+      sanitizeOptionalString(discordUser.username, 100),
+      sanitizeOptionalString(discordUser.global_name || discordUser.display_name, 100),
+      sanitizeOptionalString(discordUser.avatar, 128),
+      now,
+      now,
+      String(discordUser.id)
+    ).run();
+  }
+
+  const user = await env.DB.prepare(`
+    SELECT id, discord_user_id, username, global_name, avatar_hash, role, status, created_at, updated_at, last_login_at
+    FROM users
+    WHERE discord_user_id = ?
+  `).bind(String(discordUser.id)).first();
+  return normalizeUserRow(user);
+}
+
+function getDiscordRedirectUri(env) {
+  const redirectUri = requireEnv(env, "DISCORD_REDIRECT_URI");
+  const url = new URL(redirectUri);
+  if (url.protocol !== "https:") {
+    throw new HttpError(500, "DISCORD_REDIRECT_URI must use HTTPS.");
+  }
+  return url.toString();
+}
+
+async function signToken(env, payload) {
+  const payloadBase64 = base64UrlEncode(JSON.stringify(payload));
+  const signature = await hmacHex(env.ADMIN_SESSION_SECRET || "", payloadBase64);
+  return `${payloadBase64}.${signature}`;
+}
+
+async function verifySignedToken(env, token, expectedScope) {
+  if (typeof token !== "string") {
+    return null;
+  }
+  const parts = token.split(".");
   if (parts.length !== 2) {
     return null;
   }
@@ -549,24 +1146,16 @@ async function readSession(request, env) {
     return null;
   }
 
-  const payload = JSON.parse(base64UrlDecode(payloadBase64));
-  if (!payload || payload.role !== "admin" || typeof payload.exp !== "number" || payload.exp <= Math.floor(Date.now() / 1000)) {
+  let payload;
+  try {
+    payload = JSON.parse(base64UrlDecode(payloadBase64));
+  } catch {
     return null;
   }
-
+  if (!payload || payload.scope !== expectedScope || typeof payload.exp !== "number" || payload.exp <= Math.floor(Date.now() / 1000)) {
+    return null;
+  }
   return payload;
-}
-
-async function issueSessionCookie(request, env) {
-  const now = Math.floor(Date.now() / 1000);
-  const payload = {
-    role: "admin",
-    iat: now,
-    exp: now + SESSION_LIFETIME_SECONDS
-  };
-  const payloadBase64 = base64UrlEncode(JSON.stringify(payload));
-  const signature = await hmacHex(env.ADMIN_SESSION_SECRET || "", payloadBase64);
-  return buildSessionCookie(request, `${payloadBase64}.${signature}`, SESSION_LIFETIME_SECONDS);
 }
 
 function buildSessionCookie(request, value, maxAge) {
@@ -576,262 +1165,433 @@ function buildSessionCookie(request, value, maxAge) {
     `${SESSION_COOKIE}=${value}`,
     "Path=/",
     "HttpOnly",
-    "SameSite=Strict",
+    "SameSite=Lax",
     `Max-Age=${maxAge}`,
     secure ? "Secure" : ""
   ].filter(Boolean).join("; ");
 }
 
-async function getTotpConfig(env) {
-  const row = await env.DB.prepare(`
-    SELECT secret, issuer, account_label, digits, period, updated_at
-    FROM admin_config
-    WHERE config_key = ?
-  `).bind(TOTP_CONFIG_KEY).first();
+function buildOAuthStateCookie(request, value, maxAge) {
+  const url = new URL(request.url);
+  const secure = url.protocol === "https:";
+  return [
+    `${OAUTH_STATE_COOKIE}=${value}`,
+    "Path=/api/auth/callback",
+    "HttpOnly",
+    "SameSite=Lax",
+    `Max-Age=${maxAge}`,
+    secure ? "Secure" : ""
+  ].filter(Boolean).join("; ");
+}
 
+function createRandomToken() {
+  return crypto.randomUUID().replaceAll("-", "");
+}
+
+function getPermissionsForRole(role) {
+  return ROLE_PERMISSIONS[role] || [];
+}
+
+function hasCapability(role, capability) {
+  if (!role) {
+    return false;
+  }
+  const permissions = getPermissionsForRole(role);
+  return permissions.includes(capability) || permissions.includes("owner:all");
+}
+
+function normalizeUserRow(row) {
+  return {
+    id: Number(row.id),
+    discord_user_id: row.discord_user_id,
+    username: row.username || "",
+    global_name: row.global_name || "",
+    avatar_hash: row.avatar_hash || "",
+    role: row.role,
+    status: row.status || "active",
+    created_at: row.created_at || "",
+    updated_at: row.updated_at || "",
+    last_login_at: row.last_login_at || ""
+  };
+}
+
+function serializeTeamUser(row) {
+  const user = normalizeUserRow(row);
+  return {
+    id: user.id,
+    discordUserId: user.discord_user_id,
+    username: user.username,
+    globalName: user.global_name,
+    displayName: user.global_name || user.username || user.discord_user_id,
+    handle: user.username ? `@${user.username}` : "",
+    avatarUrl: buildDiscordAvatarUrl(user.discord_user_id, user.avatar_hash),
+    role: user.role,
+    status: user.status,
+    createdAt: user.created_at,
+    updatedAt: user.updated_at,
+    lastLoginAt: user.last_login_at
+  };
+}
+
+function serializePublicTeamUser(row) {
+  const user = normalizeUserRow(row);
+  return {
+    displayName: user.global_name || user.username || "BBTSL Team",
+    handle: user.username ? `@${user.username}` : "",
+    avatarUrl: buildDiscordAvatarUrl(user.discord_user_id, user.avatar_hash),
+    role: user.role
+  };
+}
+
+function buildDiscordAvatarUrl(discordUserId, avatarHash) {
+  if (!discordUserId) {
+    return null;
+  }
+  if (avatarHash) {
+    const extension = String(avatarHash).startsWith("a_") ? "gif" : "png";
+    return `https://cdn.discordapp.com/avatars/${discordUserId}/${avatarHash}.${extension}?size=256`;
+  }
+  return `https://cdn.discordapp.com/embed/avatars/${getDiscordDefaultAvatarIndex(discordUserId)}.png`;
+}
+
+function getDiscordDefaultAvatarIndex(discordUserId) {
+  try {
+    return Number((BigInt(String(discordUserId)) >> 22n) % 6n);
+  } catch {
+    const value = String(discordUserId)
+      .split("")
+      .reduce((total, char) => total + char.charCodeAt(0), 0);
+    return value % 6;
+  }
+}
+
+async function getSwordById(env, id) {
+  return env.DB.prepare(`
+    SELECT id, card_id, n, c, v, d, t, ct, u, descr, image_key, detail_image_key, slash_media_key, slash_audio_key, edited
+    FROM swords
+    WHERE id = ?
+  `).bind(id).first();
+}
+
+async function getSwordByCardId(env, cardId) {
+  return env.DB.prepare(`
+    SELECT id, card_id, n, c, v, d, t, ct, u, descr, image_key, detail_image_key, slash_media_key, slash_audio_key, edited
+    FROM swords
+    WHERE card_id = ?
+  `).bind(cardId).first();
+}
+
+function serializeSword(row, mediaMap = new Map()) {
   if (!row) {
     return null;
   }
 
   return {
-    secret: row.secret,
-    issuer: row.issuer,
-    accountLabel: row.account_label,
-    digits: Number(row.digits),
-    period: Number(row.period),
-    updatedAt: row.updated_at
+    id: Number(row.id),
+    cardId: row.card_id || null,
+    n: row.n,
+    c: row.c,
+    v: Number(row.v),
+    d: row.d,
+    t: row.t,
+    ct: row.ct === null || row.ct === undefined ? null : Number(row.ct),
+    u: row.u,
+    descr: row.descr || "",
+    img: buildMediaDescriptor(row.image_key, mediaMap),
+    detailMedia: buildMediaDescriptor(row.detail_image_key, mediaMap),
+    slashMedia: buildMediaDescriptor(row.slash_media_key, mediaMap),
+    slashAudio: buildMediaDescriptor(row.slash_audio_key, mediaMap),
+    edited: Boolean(row.edited)
   };
 }
 
-function buildTotpStatusResponse(config) {
+function collectSwordMediaKeys(rows) {
+  const keys = new Set();
+  for (const row of rows || []) {
+    [row.image_key, row.detail_image_key, row.slash_media_key, row.slash_audio_key].forEach((key) => {
+      if (typeof key === "string" && key) {
+        keys.add(key);
+      }
+    });
+  }
+  return [...keys];
+}
+
+function buildMediaDescriptor(key, mediaMap = new Map()) {
+  if (typeof key !== "string" || !key) {
+    return null;
+  }
+  const descriptor = mediaMap.get(key);
+  if (descriptor) {
+    return descriptor;
+  }
+
+  const fallbackKind = inferMediaKindFromKey(key);
+  const url = buildMediaUrl(key);
   return {
-    configured: true,
-    issuer: config.issuer,
-    accountLabel: config.accountLabel,
-    period: config.period,
-    digits: config.digits,
-    updatedAt: config.updatedAt
+    key,
+    kind: fallbackKind,
+    low: url,
+    medium: url,
+    original: url
   };
 }
 
-function buildTotpProvisioningResponse(config) {
+function buildMediaUrl(key) {
+  return `/media/${encodeURIComponent(key)}`;
+}
+
+function inferMediaKindFromKey(key) {
+  const lowerKey = String(key || "").toLowerCase();
+  if (/\.(mp3|ogg|wav)$/i.test(lowerKey)) {
+    return "audio";
+  }
+  if (/\.mp4$/i.test(lowerKey)) {
+    return "video";
+  }
+  return "image";
+}
+
+function normalizeSwordPayload(body) {
   return {
-    configured: true,
-    secret: config.secret,
-    manualEntryKey: config.secret,
-    issuer: config.issuer,
-    accountLabel: config.accountLabel,
-    period: config.period,
-    digits: config.digits,
-    otpauthUrl: buildOtpAuthUrl(config),
-    googleAuthenticatorUrl: buildOtpAuthUrl(config)
+    n: requireString(body.n, "Name"),
+    c: requireEnum(body.c, CATEGORIES, "Category"),
+    v: clampInteger(body.v, 0, MAX_EDIT_VALUE, "Value"),
+    d: requireEnum(body.d, DEMANDS, "Demand"),
+    t: requireEnum(body.t, TRENDS, "Trend"),
+    ct: body.ct === null || body.ct === undefined || body.ct === "" ? null : clampInteger(body.ct, 0, 1_000_000, "Count"),
+    descr: sanitizeOptionalString(body.descr, MAX_TEXT_LENGTH),
+    img: body.img,
+    detailMedia: body.detailMedia,
+    slashMedia: body.slashMedia,
+    slashAudio: body.slashAudio
   };
 }
 
-async function verifyTotpCode(secret, providedCode, windowSteps) {
-  const secretBytes = decodeBase32(secret);
-  const now = Math.floor(Date.now() / 1000);
-  const currentCounter = Math.floor(now / TOTP_PERIOD_SECONDS);
+function swordPayloadFromSnapshot(snapshot) {
+  return {
+    n: snapshot.n,
+    c: snapshot.c,
+    v: snapshot.v,
+    d: snapshot.d,
+    t: snapshot.t,
+    ct: snapshot.ct,
+    descr: snapshot.descr,
+    img: snapshot.img ?? null,
+    detailMedia: snapshot.detailMedia ?? null,
+    slashMedia: snapshot.slashMedia ?? null,
+    slashAudio: snapshot.slashAudio ?? null
+  };
+}
 
-  for (let offset = -windowSteps; offset <= windowSteps; offset += 1) {
-    const expected = await generateTotp(secretBytes, currentCounter + offset, TOTP_DIGITS);
-    if (timingSafeEqual(expected, providedCode)) {
-      return true;
+async function applySwordSnapshotUpdate(env, id, payload) {
+  const current = await getSwordById(env, id);
+  if (!current) {
+    throw new HttpError(404, "Sword not found.");
+  }
+  const normalized = normalizeSwordPayload(payload);
+  const image = normalized.img !== undefined ? await persistMedia(env, normalized.img, normalized.n, "card-image") : { mediaKey: current.image_key };
+  const detailMedia = normalized.detailMedia !== undefined ? await persistMedia(env, normalized.detailMedia, normalized.n, "detail") : { mediaKey: current.detail_image_key };
+  const slashMedia = normalized.slashMedia !== undefined ? await persistMedia(env, normalized.slashMedia, normalized.n, "slash") : { mediaKey: current.slash_media_key };
+  const slashAudio = normalized.slashAudio !== undefined ? await persistMedia(env, normalized.slashAudio, normalized.n, "slash-audio") : { mediaKey: current.slash_audio_key };
+
+  await env.DB.prepare(`
+    UPDATE swords
+    SET n = ?, c = ?, v = ?, d = ?, t = ?, ct = ?, u = ?, descr = ?, image_key = ?, detail_image_key = ?, slash_media_key = ?, slash_audio_key = ?, edited = 1
+    WHERE id = ?
+  `).bind(
+    normalized.n,
+    normalized.c,
+    normalized.v,
+    normalized.d,
+    normalized.t,
+    normalized.ct,
+    currentDateString(),
+    normalized.descr,
+    image.mediaKey,
+    detailMedia.mediaKey,
+    slashMedia.mediaKey,
+    slashAudio.mediaKey,
+    id
+  ).run();
+}
+
+async function restoreSwordSnapshot(env, snapshot) {
+  const existing = await getSwordById(env, Number(snapshot.id));
+  if (!existing) {
+    const image = snapshot.img ? await persistMedia(env, snapshot.img, snapshot.n, "card-image") : { mediaKey: null };
+    const detailMedia = snapshot.detailMedia ? await persistMedia(env, snapshot.detailMedia, snapshot.n, "detail") : { mediaKey: null };
+    const slashMedia = snapshot.slashMedia ? await persistMedia(env, snapshot.slashMedia, snapshot.n, "slash") : { mediaKey: null };
+    const slashAudio = snapshot.slashAudio ? await persistMedia(env, snapshot.slashAudio, snapshot.n, "slash-audio") : { mediaKey: null };
+    await env.DB.prepare(`
+      INSERT INTO swords (id, card_id, n, c, v, d, t, ct, u, descr, image_key, detail_image_key, slash_media_key, slash_audio_key, edited)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+    `).bind(
+      snapshot.id,
+      snapshot.cardId,
+      snapshot.n,
+      snapshot.c,
+      snapshot.v,
+      snapshot.d,
+      snapshot.t,
+      snapshot.ct,
+      currentDateString(),
+      snapshot.descr || "",
+      image.mediaKey,
+      detailMedia.mediaKey,
+      slashMedia.mediaKey,
+      slashAudio.mediaKey
+    ).run();
+    return;
+  }
+
+  await applySwordSnapshotUpdate(env, Number(snapshot.id), swordPayloadFromSnapshot(snapshot));
+}
+
+async function persistMedia(env, mediaInput, swordName, variant) {
+  if (mediaInput === null) {
+    return { mediaKey: null };
+  }
+
+  if (typeof mediaInput === "object" && !Array.isArray(mediaInput)) {
+    if (typeof mediaInput.key === "string" && mediaInput.key) {
+      return { mediaKey: mediaInput.key };
+    }
+    return persistVariantMedia(env, mediaInput, swordName, variant);
+  }
+
+  if (typeof mediaInput !== "string") {
+    throw new HttpError(400, "Media must be a data URL string, media descriptor, or null.");
+  }
+
+  const existingKey = parseMediaKeyFromInput(mediaInput);
+  if (existingKey) {
+    return { mediaKey: existingKey };
+  }
+
+  const parsed = parseDataUrl(mediaInput);
+  const maxBytes = parsed.kind === "audio" || parsed.kind === "video" ? MAX_MEDIA_BYTES : MAX_IMAGE_BYTES;
+  if (parsed.bytes.byteLength > maxBytes) {
+    throw new HttpError(413, "Media file is too large.");
+  }
+
+  const baseKey = buildMediaSetKey(swordName, variant);
+  const variantKeys = buildVariantKeys(baseKey, parsed.extension);
+  const isVariantFriendlyImage = parsed.kind === "image" && parsed.contentType !== "image/gif" && parsed.contentType !== "image/svg+xml";
+
+  if (isVariantFriendlyImage) {
+    await Promise.all([
+      upsertMediaRecord(env, variantKeys.low, parsed.contentType, parsed.bytes),
+      upsertMediaRecord(env, variantKeys.medium, parsed.contentType, parsed.bytes),
+      upsertMediaRecord(env, variantKeys.original, parsed.contentType, parsed.bytes)
+    ]);
+    await upsertMediaVariantSet(env, {
+      baseKey,
+      mediaKind: parsed.kind,
+      contentType: parsed.contentType,
+      lowKey: variantKeys.low,
+      mediumKey: variantKeys.medium,
+      originalKey: variantKeys.original
+    });
+    return { mediaKey: baseKey };
+  }
+
+  await upsertMediaRecord(env, variantKeys.original, parsed.contentType, parsed.bytes);
+  await upsertMediaVariantSet(env, {
+    baseKey,
+    mediaKind: parsed.kind,
+    contentType: parsed.contentType,
+    lowKey: variantKeys.original,
+    mediumKey: variantKeys.original,
+    originalKey: variantKeys.original
+  });
+  return { mediaKey: baseKey };
+}
+
+async function persistVariantMedia(env, mediaInput, swordName, variant) {
+  const normalized = normalizeVariantMediaInput(mediaInput);
+  if (normalized.kind !== "image" || !normalized.low || !normalized.medium || !normalized.original) {
+    throw new HttpError(400, "Variant media payload is incomplete.");
+  }
+
+  const parsedLow = parseDataUrl(normalized.low);
+  const parsedMedium = parseDataUrl(normalized.medium);
+  const parsedOriginal = parseDataUrl(normalized.original);
+  const parsedList = [parsedLow, parsedMedium, parsedOriginal];
+  for (const parsed of parsedList) {
+    if (parsed.kind !== "image") {
+      throw new HttpError(415, "Only image media can include generated quality variants.");
+    }
+    if (parsed.bytes.byteLength > MAX_IMAGE_BYTES) {
+      throw new HttpError(413, "Media file is too large.");
     }
   }
 
-  return false;
+  const baseKey = buildMediaSetKey(swordName, variant);
+  const variantKeys = buildVariantKeys(baseKey, parsedOriginal.extension);
+  await Promise.all([
+    upsertMediaRecord(env, variantKeys.low, parsedLow.contentType, parsedLow.bytes),
+    upsertMediaRecord(env, variantKeys.medium, parsedMedium.contentType, parsedMedium.bytes),
+    upsertMediaRecord(env, variantKeys.original, parsedOriginal.contentType, parsedOriginal.bytes)
+  ]);
+  await upsertMediaVariantSet(env, {
+    baseKey,
+    mediaKind: "image",
+    contentType: parsedOriginal.contentType,
+    lowKey: variantKeys.low,
+    mediumKey: variantKeys.medium,
+    originalKey: variantKeys.original
+  });
+  return { mediaKey: baseKey };
 }
 
-async function generateTotp(secretBytes, counter, digits) {
-  const counterBytes = new ArrayBuffer(8);
-  const view = new DataView(counterBytes);
-  const high = Math.floor(counter / 2 ** 32);
-  const low = counter >>> 0;
-  view.setUint32(0, high);
-  view.setUint32(4, low);
-
-  const key = await crypto.subtle.importKey(
-    "raw",
-    secretBytes,
-    { name: "HMAC", hash: "SHA-1" },
-    false,
-    ["sign"]
-  );
-  const signature = new Uint8Array(await crypto.subtle.sign("HMAC", key, counterBytes));
-  const offset = signature[signature.length - 1] & 0x0f;
-  const binary = ((signature[offset] & 0x7f) << 24)
-    | ((signature[offset + 1] & 0xff) << 16)
-    | ((signature[offset + 2] & 0xff) << 8)
-    | (signature[offset + 3] & 0xff);
-  const otp = binary % (10 ** digits);
-  return String(otp).padStart(digits, "0");
+function normalizeVariantMediaInput(mediaInput) {
+  return {
+    key: sanitizeOptionalString(mediaInput.key, MEDIA_KEY_LIMIT),
+    kind: sanitizeOptionalString(mediaInput.kind, 16) || "image",
+    low: mediaInput.low,
+    medium: mediaInput.medium,
+    original: mediaInput.original
+  };
 }
 
-function buildOtpAuthUrl(config) {
-  const label = encodeURIComponent(`${config.issuer}:${config.accountLabel}`);
-  const issuer = encodeURIComponent(config.issuer);
-  return `otpauth://totp/${label}?secret=${config.secret}&issuer=${issuer}&algorithm=SHA1&digits=${config.digits}&period=${config.period}`;
-}
-
-function generateTotpSecret(length = 20) {
-  const bytes = new Uint8Array(length);
-  crypto.getRandomValues(bytes);
-  return encodeBase32(bytes);
-}
-
-function normalizeBase32Secret(value) {
-  const normalized = String(value).toUpperCase().replace(/[^A-Z2-7]/g, "");
-  if (!normalized) {
-    throw new HttpError(400, "Authenticator secret is invalid.");
+function parseMediaKeyFromInput(mediaInput) {
+  if (typeof mediaInput !== "string") {
+    return null;
   }
-
-  decodeBase32(normalized);
-  return normalized;
-}
-
-function parseCookies(cookieHeader) {
-  const out = {};
-  for (const pair of cookieHeader.split(/;\s*/)) {
-    if (!pair) {
-      continue;
+  if (mediaInput.startsWith("/media/")) {
+    const path = mediaInput.split("?")[0];
+    return decodeURIComponent(path.slice("/media/".length));
+  }
+  try {
+    const parsedUrl = new URL(mediaInput);
+    if (parsedUrl.pathname.startsWith("/media/")) {
+      return decodeURIComponent(parsedUrl.pathname.slice("/media/".length));
     }
-    const separator = pair.indexOf("=");
-    if (separator <= 0) {
-      continue;
-    }
-    out[pair.slice(0, separator)] = pair.slice(separator + 1);
+  } catch {
+    return null;
   }
-  return out;
+  return null;
 }
 
-async function hmacHex(secret, value) {
-  if (!secret) {
-    throw new HttpError(500, "Admin session secret is not configured.");
-  }
-
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-  const signature = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(value)));
-  return [...signature].map((part) => part.toString(16).padStart(2, "0")).join("");
+function buildMediaSetKey(swordName, variant) {
+  const slug = swordName
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48) || "sword";
+  return `media/${slug}-${variant}-${crypto.randomUUID()}`;
 }
 
-function timingSafeEqual(left, right) {
-  if (typeof left !== "string" || typeof right !== "string" || left.length !== right.length) {
-    return false;
-  }
-
-  let result = 0;
-  for (let index = 0; index < left.length; index += 1) {
-    result |= left.charCodeAt(index) ^ right.charCodeAt(index);
-  }
-  return result === 0;
+function buildVariantKeys(baseKey, extension) {
+  return {
+    low: `${baseKey}--low.${extension}`,
+    medium: `${baseKey}--medium.${extension}`,
+    original: `${baseKey}--original.${extension}`
+  };
 }
 
-function decodeBase32(input) {
-  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-  let bits = 0;
-  let value = 0;
-  const output = [];
-
-  for (const char of input) {
-    const idx = alphabet.indexOf(char);
-    if (idx === -1) {
-      throw new HttpError(400, "Authenticator secret is invalid.");
-    }
-
-    value = (value << 5) | idx;
-    bits += 5;
-
-    if (bits >= 8) {
-      output.push((value >>> (bits - 8)) & 255);
-      bits -= 8;
-    }
-  }
-
-  return new Uint8Array(output);
-}
-
-function encodeBase32(bytes) {
-  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-  let bits = 0;
-  let value = 0;
-  let output = "";
-
-  for (const byte of bytes) {
-    value = (value << 8) | byte;
-    bits += 8;
-    while (bits >= 5) {
-      output += alphabet[(value >>> (bits - 5)) & 31];
-      bits -= 5;
-    }
-  }
-
-  if (bits > 0) {
-    output += alphabet[(value << (5 - bits)) & 31];
-  }
-
-  return output;
-}
-
-function base64UrlEncode(value) {
-  const bytes = new TextEncoder().encode(value);
-  let binary = "";
-  for (const byte of bytes) {
-    binary += String.fromCharCode(byte);
-  }
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
-}
-
-function base64UrlDecode(value) {
-  const padded = value.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - value.length % 4) % 4);
-  const binary = atob(padded);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-  return new TextDecoder().decode(bytes);
-}
-
-async function persistImage(env, imageInput, currentKey, swordName) {
-  if (imageInput === null) {
-    return { imageKey: null };
-  }
-
-  if (typeof imageInput !== "string") {
-    throw new HttpError(400, "Image must be a data URL string or null.");
-  }
-
-  const parsed = parseDataUrl(imageInput);
-  if (parsed.bytes.byteLength > MAX_IMAGE_BYTES) {
-    throw new HttpError(413, "Image is too large.");
-  }
-
-  const nextKey = buildImageKey(swordName, parsed.extension);
-  await upsertImageRecord(env, nextKey, parsed.contentType, parsed.bytes);
-
-  return { imageKey: nextKey };
-}
-
-async function importImageRecord(env, imageKey, imageDataUrl) {
-  if (typeof imageDataUrl !== "string") {
-    throw new HttpError(400, "Image payload is invalid.");
-  }
-
-  const parsed = parseDataUrl(imageDataUrl);
-  if (parsed.bytes.byteLength > MAX_IMAGE_BYTES) {
-    throw new HttpError(413, "Image is too large.");
-  }
-
-  await upsertImageRecord(env, imageKey, parsed.contentType, parsed.bytes);
-}
-
-async function upsertImageRecord(env, imageKey, contentType, bytes) {
+async function upsertMediaRecord(env, mediaKey, contentType, bytes) {
   await env.DB.prepare(`
     INSERT INTO sword_images (image_key, content_type, image_data, updated_at)
     VALUES (?, ?, ?, ?)
@@ -840,23 +1600,124 @@ async function upsertImageRecord(env, imageKey, contentType, bytes) {
       image_data = excluded.image_data,
       updated_at = excluded.updated_at
   `).bind(
-    imageKey,
+    mediaKey,
     contentType,
     bytes,
     currentIsoString()
   ).run();
 }
 
+async function upsertMediaVariantSet(env, record) {
+  await env.DB.prepare(`
+    INSERT INTO media_variant_sets (base_key, media_kind, content_type, low_key, medium_key, original_key, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(base_key) DO UPDATE SET
+      media_kind = excluded.media_kind,
+      content_type = excluded.content_type,
+      low_key = excluded.low_key,
+      medium_key = excluded.medium_key,
+      original_key = excluded.original_key,
+      updated_at = excluded.updated_at
+  `).bind(
+    record.baseKey,
+    record.mediaKind,
+    record.contentType,
+    record.lowKey,
+    record.mediumKey,
+    record.originalKey,
+    currentIsoString()
+  ).run();
+}
+
+async function loadMediaDescriptorMap(env, baseKeys) {
+  const keyList = [...new Set((baseKeys || []).filter(Boolean))];
+  if (!keyList.length) {
+    return new Map();
+  }
+
+  const mediaMap = new Map();
+  const manifests = await selectByInClause(
+    env,
+    "SELECT base_key, media_kind, content_type, low_key, medium_key, original_key FROM media_variant_sets WHERE base_key IN",
+    keyList
+  );
+  for (const row of manifests) {
+    mediaMap.set(row.base_key, {
+      key: row.base_key,
+      kind: row.media_kind || inferMediaKindFromKey(row.original_key || row.base_key),
+      low: buildMediaUrl(row.low_key || row.original_key || row.base_key),
+      medium: buildMediaUrl(row.medium_key || row.original_key || row.base_key),
+      original: buildMediaUrl(row.original_key || row.base_key)
+    });
+  }
+
+  const missingKeys = keyList.filter((key) => !mediaMap.has(key));
+  if (!missingKeys.length) {
+    return mediaMap;
+  }
+
+  const originalRows = await selectByInClause(
+    env,
+    "SELECT image_key, content_type FROM sword_images WHERE image_key IN",
+    missingKeys
+  );
+  const contentTypeMap = new Map(originalRows.map((row) => [row.image_key, row.content_type]));
+  for (const key of missingKeys) {
+    const contentType = contentTypeMap.get(key) || "";
+    mediaMap.set(key, {
+      key,
+      kind: inferMediaKindFromContentType(contentType) || inferMediaKindFromKey(key),
+      low: buildMediaUrl(key),
+      medium: buildMediaUrl(key),
+      original: buildMediaUrl(key)
+    });
+  }
+
+  return mediaMap;
+}
+
+async function selectByInClause(env, sqlPrefix, values) {
+  if (!values.length) {
+    return [];
+  }
+  const results = [];
+  const chunkSize = 64;
+  for (let start = 0; start < values.length; start += chunkSize) {
+    const slice = values.slice(start, start + chunkSize);
+    const placeholders = slice.map(() => "?").join(", ");
+    const sql = `${sqlPrefix} (${placeholders})`;
+    const rows = await env.DB.prepare(sql).bind(...slice).all();
+    for (const row of rows.results || []) {
+      results.push(row);
+    }
+  }
+  return results;
+}
+
+function inferMediaKindFromContentType(contentType) {
+  const lowerType = String(contentType || "").toLowerCase();
+  if (lowerType.startsWith("audio/")) {
+    return "audio";
+  }
+  if (lowerType.startsWith("video/")) {
+    return "video";
+  }
+  if (lowerType.startsWith("image/")) {
+    return "image";
+  }
+  return "";
+}
+
 function parseDataUrl(input) {
   const match = /^data:([^;]+);base64,(.+)$/i.exec(input);
   if (!match) {
-    throw new HttpError(400, "Image must be a base64 data URL.");
+    throw new HttpError(400, "Media must be a base64 data URL.");
   }
 
   const contentType = match[1].toLowerCase();
-  const extension = mimeToExtension(contentType);
-  if (!extension) {
-    throw new HttpError(415, "Unsupported image type.");
+  const mediaInfo = MEDIA_MIME_MAP.get(contentType);
+  if (!mediaInfo) {
+    throw new HttpError(415, "Unsupported media type.");
   }
 
   const binary = atob(match[2]);
@@ -865,44 +1726,7 @@ function parseDataUrl(input) {
     bytes[index] = binary.charCodeAt(index);
   }
 
-  return { contentType, extension, bytes };
-}
-
-function mimeToExtension(contentType) {
-  switch (contentType) {
-    case "image/webp":
-      return "webp";
-    case "image/png":
-      return "png";
-    case "image/jpeg":
-      return "jpg";
-    case "image/gif":
-      return "gif";
-    default:
-      return null;
-  }
-}
-
-function buildImageKey(swordName, extension) {
-  const slug = swordName
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48) || "sword";
-  return `swords/${slug}-${crypto.randomUUID()}.${extension}`;
-}
-
-function requireImageKey(value) {
-  if (typeof value !== "string") {
-    throw new HttpError(400, "Image key is invalid.");
-  }
-
-  const normalized = value.trim().slice(0, 512);
-  if (!normalized) {
-    throw new HttpError(400, "Image key is invalid.");
-  }
-
-  return normalized;
+  return { contentType, extension: mediaInfo.ext, kind: mediaInfo.kind, bytes };
 }
 
 function normalizeBlobBody(value) {
@@ -928,7 +1752,6 @@ function normalizeBlobBody(value) {
     const numericKeys = Object.keys(value)
       .filter((key) => /^\d+$/.test(key))
       .sort((left, right) => Number(left) - Number(right));
-
     if (numericKeys.length > 0) {
       return Uint8Array.from(numericKeys.map((key) => Number(value[key]) || 0));
     }
@@ -937,7 +1760,7 @@ function normalizeBlobBody(value) {
   return value;
 }
 
-async function readImageBody(value) {
+async function readMediaBody(value) {
   if (typeof Blob !== "undefined" && value instanceof Blob) {
     return new Uint8Array(await value.arrayBuffer());
   }
@@ -954,30 +1777,26 @@ async function readImageBody(value) {
   return null;
 }
 
-async function readImageBodyFromChunks(env, key, imageSize) {
-  if (!Number.isFinite(imageSize) || imageSize <= 0) {
+async function readMediaBodyFromChunks(env, key, mediaSize) {
+  if (!Number.isFinite(mediaSize) || mediaSize <= 0) {
     return null;
   }
 
   const chunkSize = 262144;
-  const bytes = new Uint8Array(imageSize);
-
-  for (let offset = 0; offset < imageSize; offset += chunkSize) {
-    const length = Math.min(chunkSize, imageSize - offset);
+  const bytes = new Uint8Array(mediaSize);
+  for (let offset = 0; offset < mediaSize; offset += chunkSize) {
+    const length = Math.min(chunkSize, mediaSize - offset);
     const row = await env.DB.prepare(`
-      SELECT hex(substr(image_data, ?, ?)) AS image_hex
+      SELECT hex(substr(image_data, ?, ?)) AS media_hex
       FROM sword_images
       WHERE image_key = ?
     `).bind(offset + 1, length, key).first();
-
-    const chunk = hexToBytes(row?.image_hex);
+    const chunk = hexToBytes(row?.media_hex);
     if (chunk.byteLength !== length) {
       return null;
     }
-
     bytes.set(chunk, offset);
   }
-
   return bytes;
 }
 
@@ -993,45 +1812,383 @@ function hexToBytes(value) {
   return bytes;
 }
 
-function serializeSword(row) {
-  if (!row) {
+async function writeAuditLog(env, entry) {
+  const beforeSnapshot = entry.beforeSnapshot === undefined ? null : entry.beforeSnapshot;
+  const afterSnapshot = entry.afterSnapshot === undefined ? null : entry.afterSnapshot;
+  const diff = buildDiff(beforeSnapshot, afterSnapshot);
+  await env.DB.prepare(`
+    INSERT INTO audit_logs (actor_user_id, actor_role, action_type, entity_type, entity_id, entity_public_id, summary, diff_json, before_json, after_json, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    entry.actor?.id || entry.actor?.user?.id || null,
+    entry.actor?.role || entry.actor?.user?.role || null,
+    entry.actionType,
+    entry.entityType,
+    entry.entityId,
+    entry.entityPublicId,
+    entry.summary,
+    JSON.stringify(diff),
+    beforeSnapshot === null ? null : JSON.stringify(beforeSnapshot),
+    afterSnapshot === null ? null : JSON.stringify(afterSnapshot),
+    currentIsoString()
+  ).run();
+}
+
+function buildDiff(beforeSnapshot, afterSnapshot) {
+  if (beforeSnapshot === null && afterSnapshot !== null) {
+    return [{ field: "*", from: null, to: summarizeValue(afterSnapshot) }];
+  }
+  if (beforeSnapshot !== null && afterSnapshot === null) {
+    return [{ field: "*", from: summarizeValue(beforeSnapshot), to: null }];
+  }
+  if (Array.isArray(beforeSnapshot) || Array.isArray(afterSnapshot)) {
+    return [{ field: "*", from: summarizeValue(beforeSnapshot), to: summarizeValue(afterSnapshot) }];
+  }
+  const diff = [];
+  const keys = new Set([
+    ...Object.keys(beforeSnapshot || {}),
+    ...Object.keys(afterSnapshot || {})
+  ]);
+  for (const key of [...keys].sort()) {
+    const beforeValue = beforeSnapshot?.[key] ?? null;
+    const afterValue = afterSnapshot?.[key] ?? null;
+    if (JSON.stringify(beforeValue) !== JSON.stringify(afterValue)) {
+      diff.push({ field: key, from: summarizeValue(beforeValue), to: summarizeValue(afterValue) });
+    }
+  }
+  return diff;
+}
+
+function summarizeValue(value) {
+  if (value === null || value === undefined) {
     return null;
   }
+  if (Array.isArray(value)) {
+    return { type: "array", count: value.length };
+  }
+  if (typeof value === "object") {
+    return value;
+  }
+  return value;
+}
 
+function serializeAuditLog(row) {
   return {
     id: Number(row.id),
-    n: row.n,
-    c: row.c,
-    v: Number(row.v),
-    d: row.d,
-    t: row.t,
-    ct: row.ct === null || row.ct === undefined ? null : Number(row.ct),
-    u: row.u,
-    descr: row.descr || "",
-    img: row.image_key ? `/images/${encodeURIComponent(row.image_key)}` : null,
-    edited: Boolean(row.edited)
+    actorUserId: row.actor_user_id === null || row.actor_user_id === undefined ? null : Number(row.actor_user_id),
+    actorRole: row.actor_role || "",
+    actorUsername: row.actor_username || "",
+    actorGlobalName: row.actor_global_name || "",
+    actionType: row.action_type,
+    entityType: row.entity_type,
+    entityId: row.entity_id === null || row.entity_id === undefined ? null : Number(row.entity_id),
+    entityPublicId: row.entity_public_id || null,
+    summary: row.summary || "",
+    diff: parseJsonField(row.diff_json) || [],
+    before: parseJsonField(row.before_json),
+    after: parseJsonField(row.after_json),
+    createdAt: row.created_at
   };
 }
 
-function currentDateString() {
-  return new Date().toISOString().slice(0, 10);
+function parseJsonField(value) {
+  if (!value) {
+    return null;
+  }
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
 }
 
-function currentIsoString() {
-  return new Date().toISOString();
+async function generateUniqueCardId(env) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const next = `${CARD_ID_PREFIX}${generateRandomCardIdBody()}`;
+    const existing = await env.DB.prepare("SELECT id FROM swords WHERE card_id = ?").bind(next).first();
+    if (!existing) {
+      return next;
+    }
+  }
+  throw new HttpError(500, "Could not generate a unique card ID.");
 }
 
-function normalizePayload(body) {
-  return {
-    n: requireString(body.n, "Name"),
-    c: requireEnum(body.c, CATEGORIES, "Category"),
-    v: clampInteger(body.v, 0, MAX_EDIT_VALUE, "Value"),
-    d: requireEnum(body.d, DEMANDS, "Demand"),
-    t: requireEnum(body.t, TRENDS, "Trend"),
-    ct: body.ct === null || body.ct === undefined || body.ct === "" ? null : clampInteger(body.ct, 0, 1_000_000, "Count"),
-    descr: sanitizeOptionalString(body.descr, 1000),
-    img: body.img
-  };
+function generateRandomCardIdBody() {
+  let out = "";
+  const bytes = new Uint8Array(CARD_ID_LENGTH);
+  crypto.getRandomValues(bytes);
+  for (const byte of bytes) {
+    out += CARD_ID_ALPHABET[byte % CARD_ID_ALPHABET.length];
+  }
+  return out;
+}
+
+async function ensureCoreSchema(env) {
+  if (!coreSchemaReadyPromise) {
+    coreSchemaReadyPromise = (async () => {
+      const createStatements = [
+        `CREATE TABLE IF NOT EXISTS swords (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          n TEXT NOT NULL,
+          c TEXT NOT NULL,
+          v INTEGER NOT NULL,
+          d TEXT NOT NULL,
+          t TEXT NOT NULL,
+          ct INTEGER,
+          u TEXT NOT NULL,
+          descr TEXT NOT NULL DEFAULT '',
+          image_key TEXT,
+          edited INTEGER NOT NULL DEFAULT 0 CHECK (edited IN (0, 1))
+        )`,
+        `CREATE TABLE IF NOT EXISTS sword_baseline (
+          id INTEGER PRIMARY KEY,
+          n TEXT NOT NULL,
+          c TEXT NOT NULL,
+          v INTEGER NOT NULL,
+          d TEXT NOT NULL,
+          t TEXT NOT NULL,
+          ct INTEGER,
+          u TEXT NOT NULL,
+          descr TEXT NOT NULL DEFAULT '',
+          image_key TEXT,
+          edited INTEGER NOT NULL DEFAULT 0 CHECK (edited IN (0, 1))
+        )`,
+        `CREATE TABLE IF NOT EXISTS sword_images (
+          image_key TEXT PRIMARY KEY,
+          content_type TEXT NOT NULL,
+          image_data BLOB NOT NULL,
+          updated_at TEXT NOT NULL
+        )`,
+        `CREATE TABLE IF NOT EXISTS media_variant_sets (
+          base_key TEXT PRIMARY KEY,
+          media_kind TEXT NOT NULL,
+          content_type TEXT NOT NULL,
+          low_key TEXT NOT NULL,
+          medium_key TEXT NOT NULL,
+          original_key TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )`,
+        `CREATE TABLE IF NOT EXISTS admin_config (
+          config_key TEXT PRIMARY KEY,
+          secret TEXT NOT NULL,
+          issuer TEXT NOT NULL,
+          account_label TEXT NOT NULL,
+          digits INTEGER NOT NULL,
+          period INTEGER NOT NULL,
+          updated_at TEXT NOT NULL
+        )`,
+        `CREATE TABLE IF NOT EXISTS rate_limits (
+          bucket TEXT NOT NULL,
+          limiter_key TEXT NOT NULL,
+          request_count INTEGER NOT NULL DEFAULT 0,
+          window_start INTEGER NOT NULL,
+          PRIMARY KEY (bucket, limiter_key)
+        )`,
+        `CREATE TABLE IF NOT EXISTS users (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          discord_user_id TEXT NOT NULL UNIQUE,
+          username TEXT,
+          global_name TEXT,
+          avatar_hash TEXT,
+          role TEXT NOT NULL DEFAULT 'Viewer',
+          role_sort INTEGER NOT NULL DEFAULT 0,
+          status TEXT NOT NULL DEFAULT 'active',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          last_login_at TEXT
+        )`,
+        `CREATE TABLE IF NOT EXISTS audit_logs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          actor_user_id INTEGER,
+          actor_role TEXT,
+          action_type TEXT NOT NULL,
+          entity_type TEXT NOT NULL,
+          entity_id INTEGER,
+          entity_public_id TEXT,
+          summary TEXT NOT NULL DEFAULT '',
+          diff_json TEXT,
+          before_json TEXT,
+          after_json TEXT,
+          created_at TEXT NOT NULL
+        )`,
+        "CREATE INDEX IF NOT EXISTS idx_swords_category ON swords (c)",
+        "CREATE INDEX IF NOT EXISTS idx_swords_value ON swords (v DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_sword_baseline_category ON sword_baseline (c)",
+        "CREATE INDEX IF NOT EXISTS idx_sword_images_updated_at ON sword_images (updated_at)",
+        "CREATE INDEX IF NOT EXISTS idx_media_variant_sets_updated_at ON media_variant_sets (updated_at)",
+        "CREATE INDEX IF NOT EXISTS idx_rate_limits_window_start ON rate_limits (window_start)",
+        "CREATE INDEX IF NOT EXISTS idx_users_role_sort ON users (role_sort DESC, updated_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs (created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_audit_logs_entity_public_id ON audit_logs (entity_public_id)"
+      ];
+
+      for (const statement of createStatements) {
+        await env.DB.prepare(statement).run();
+      }
+
+      await ensureColumn(env, "swords", "card_id", "TEXT");
+      await ensureColumn(env, "swords", "detail_image_key", "TEXT");
+      await ensureColumn(env, "swords", "slash_media_key", "TEXT");
+      await ensureColumn(env, "swords", "slash_audio_key", "TEXT");
+      await ensureColumn(env, "sword_baseline", "card_id", "TEXT");
+      await ensureColumn(env, "sword_baseline", "detail_image_key", "TEXT");
+      await ensureColumn(env, "sword_baseline", "slash_media_key", "TEXT");
+      await ensureColumn(env, "sword_baseline", "slash_audio_key", "TEXT");
+
+      await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_swords_card_id ON swords (card_id)").run();
+      await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_sword_baseline_card_id ON sword_baseline (card_id)").run();
+
+      await backfillCardIds(env);
+      await backfillRoleSorts(env);
+    })().catch((error) => {
+      coreSchemaReadyPromise = null;
+      throw error;
+    });
+  }
+
+  await coreSchemaReadyPromise;
+}
+
+async function ensureColumn(env, tableName, columnName, columnSql) {
+  const tableInfo = await env.DB.prepare(`PRAGMA table_info(${tableName})`).all();
+  const exists = (tableInfo.results || []).some((row) => row.name === columnName);
+  if (!exists) {
+    await env.DB.prepare(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnSql}`).run();
+  }
+}
+
+async function backfillCardIds(env) {
+  const { results } = await env.DB.prepare(`
+    SELECT s.id, s.card_id, b.card_id AS baseline_card_id
+    FROM swords s
+    LEFT JOIN sword_baseline b ON b.id = s.id
+    WHERE s.card_id IS NULL OR s.card_id = '' OR b.card_id IS NULL OR b.card_id = ''
+    ORDER BY s.id ASC
+  `).all();
+
+  for (const row of results || []) {
+    const nextCardId = row.card_id || row.baseline_card_id || await generateUniqueCardId(env);
+    await env.DB.prepare("UPDATE swords SET card_id = ? WHERE id = ?").bind(nextCardId, row.id).run();
+    await env.DB.prepare("UPDATE sword_baseline SET card_id = ? WHERE id = ?").bind(nextCardId, row.id).run();
+  }
+}
+
+async function backfillRoleSorts(env) {
+  const { results } = await env.DB.prepare("SELECT id, role FROM users").all();
+  for (const row of results || []) {
+    await env.DB.prepare("UPDATE users SET role_sort = ? WHERE id = ?").bind(getRoleSort(row.role), row.id).run();
+  }
+}
+
+function getRoleSort(role) {
+  return USER_ROLE_VALUES.indexOf(role);
+}
+
+function parseNumericPath(pathname, prefix) {
+  const raw = pathname.slice(prefix.length);
+  if (!/^\d+$/.test(raw)) {
+    return null;
+  }
+  return Number(raw);
+}
+
+function parseCardIdPath(pathname, prefix) {
+  const cardId = decodePathSegment(pathname.slice(prefix.length), "card ID");
+  if (!new RegExp(`^${escapeRegex(CARD_ID_PREFIX)}[${CARD_ID_ALPHABET}]{${CARD_ID_LENGTH}}$`).test(cardId)) {
+    throw new HttpError(400, "Card ID is invalid.");
+  }
+  return cardId;
+}
+
+function decodePathSegment(value, label) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    throw new HttpError(400, `${label} is invalid.`);
+  }
+}
+
+function escapeRegex(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function parsePublicSwordQuery(url) {
+  const category = url.searchParams.get("category") || "";
+  const search = (url.searchParams.get("search") || "").trim().toLowerCase();
+  const sort = url.searchParams.get("sort") || "value-desc";
+  const limit = parseBoundedQueryInteger(url.searchParams.get("limit"), PUBLIC_API_DEFAULT_LIMIT, 1, PUBLIC_API_LIMIT, "limit");
+  const offset = parseBoundedQueryInteger(url.searchParams.get("offset"), 0, 0, PUBLIC_API_MAX_OFFSET, "offset");
+  if (category && category !== "All" && !CATEGORIES.has(category)) {
+    throw new HttpError(400, "Category is invalid.");
+  }
+  if (search.length > 100) {
+    throw new HttpError(400, "Search is too long.");
+  }
+  if (!["value-desc", "value-asc", "name-asc", "updated-desc"].includes(sort)) {
+    throw new HttpError(400, "Sort is invalid.");
+  }
+
+  const bindings = [];
+  const where = [];
+  if (category && category !== "All") {
+    where.push("c = ?");
+    bindings.push(category);
+  }
+  if (search) {
+    where.push("LOWER(n) LIKE ?");
+    bindings.push(`%${search}%`);
+  }
+  return { bindings, limit, offset, sortSql: getSortSql(sort), where };
+}
+
+function parseBoundedQueryInteger(value, defaultValue, min, max, label) {
+  if (value === null || value === "") {
+    return defaultValue;
+  }
+  if (!/^\d+$/.test(value)) {
+    throw new HttpError(400, `${label} is invalid.`);
+  }
+  const number = Number(value);
+  if (!Number.isSafeInteger(number) || number < min || number > max) {
+    throw new HttpError(400, `${label} is invalid.`);
+  }
+  return number;
+}
+
+function sanitizeDiscordId(value) {
+  if (typeof value !== "string" || !/^\d{8,32}$/.test(value.trim())) {
+    throw new HttpError(400, "Discord user ID is invalid.");
+  }
+  return value.trim();
+}
+
+function requireRole(value) {
+  if (typeof value !== "string" || !USER_ROLE_VALUES.includes(value)) {
+    throw new HttpError(400, "Role is invalid.");
+  }
+  return value;
+}
+
+function requireStatus(value) {
+  if (value !== "active" && value !== "disabled") {
+    throw new HttpError(400, "Status is invalid.");
+  }
+  return value;
+}
+
+function sanitizeReturnTo(value) {
+  if (typeof value !== "string" || !value.startsWith("/") || value.startsWith("//") || /[\\\u0000-\u001f]/.test(value)) {
+    return "/";
+  }
+  try {
+    const parsed = new URL(value, "https://bbtsl.invalid");
+    if (parsed.origin !== "https://bbtsl.invalid") {
+      return "/";
+    }
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`.slice(0, 200);
+  } catch {
+    return "/";
+  }
 }
 
 function requireString(value, label) {
@@ -1045,11 +2202,9 @@ function sanitizeOptionalString(value, limit) {
   if (value === null || value === undefined) {
     return "";
   }
-
   if (typeof value !== "string") {
     throw new HttpError(400, "Text field is invalid.");
   }
-
   return value.trim().slice(0, limit);
 }
 
@@ -1057,7 +2212,6 @@ function requireEnum(value, allowed, label) {
   if (typeof value !== "string" || !allowed.has(value)) {
     throw new HttpError(400, `${label} is invalid.`);
   }
-
   return value;
 }
 
@@ -1066,7 +2220,6 @@ function clampInteger(value, min, max, label) {
   if (!Number.isInteger(number) || number < min || number > max) {
     throw new HttpError(400, `${label} is invalid.`);
   }
-
   return number;
 }
 
@@ -1084,13 +2237,12 @@ function getSortSql(sort) {
   }
 }
 
-function parseSwordId(pathname) {
-  const raw = pathname.slice("/api/swords/".length);
-  if (!/^\d+$/.test(raw)) {
-    return null;
+function requireEnv(env, key) {
+  const value = String(env[key] || "").trim();
+  if (!value) {
+    throw new HttpError(500, `${key} is not configured.`);
   }
-
-  return Number(raw);
+  return value;
 }
 
 function json(body, status = 200, extraHeaders = {}) {
@@ -1101,6 +2253,14 @@ function json(body, status = 200, extraHeaders = {}) {
       ...extraHeaders
     }
   });
+}
+
+function publicApiJson(body, status = 200) {
+  return json(body, status, { "cache-control": "public, max-age=60" });
+}
+
+function methodNotAllowed(methods) {
+  return json({ error: "Method not allowed." }, 405, { allow: methods.join(", ") });
 }
 
 function text(body, contentType) {
@@ -1131,10 +2291,12 @@ function buildLlmsText(request, env) {
     "",
     "This site publishes community-tracked Blade Ball values for rare items.",
     "Visitors can browse the list without signing in.",
-    "Authenticated admins can edit entries through server-side TOTP verification.",
-    "The main page presents a searchable card grid with each sword's name, category, demand, trend, count, value, and description when available.",
+    "Signed-in users can be assigned Viewer, Contributor, Editor, Maintainer, Administrator, Developer, or Owner roles.",
+    "Cards expose public value data and richer media details when selected.",
     "",
     `Canonical: ${siteUrl}/`,
+    `Team: ${siteUrl}/team`,
+    `Bot API: ${siteUrl}/api/v1/swords`,
     `Sitemap: ${siteUrl}/sitemap.xml`,
     `More: ${siteUrl}/llms-full.txt`
   ].join("\n");
@@ -1147,30 +2309,34 @@ function buildLlmsFullText(request, env) {
     `# ${siteName}`,
     "",
     "## Purpose",
-    "Track Blade Ball sword values in a public dark-mode catalogue.",
+    "Track Blade Ball item values in a public dark-mode catalogue with role-aware editing.",
     "",
     "## Public page structure",
-    "- Sticky top bar with site identity and last-updated text.",
-    "- Search field to filter swords by name.",
+    "- Sticky top bar with site identity, login state, and last-updated text.",
+    "- Search field to filter items by name.",
     "- Category chips for All, LTM, Ranked, Top Spenders, Other Swords, and Explosions.",
     "- Sort control for value and recency ordering.",
-    "- Card grid where each sword card shows name, category, demand, trend, count, value, image, and description.",
+    "- Card grid where each card shows name, category, demand, trend, count, value, card ID, image, and description.",
+    "- Detail modal with richer media such as item animation, slash media, and slash audio when available.",
     "",
     "## Machine-readable endpoints",
-    `- Swords API: ${siteUrl}/api/swords`,
+    `- Bot API health: ${siteUrl}/api/v1/health`,
+    `- Bot API sword list: ${siteUrl}/api/v1/swords`,
+    `- Bot API team: ${siteUrl}/api/v1/team`,
     `- Robots: ${siteUrl}/robots.txt`,
     `- Sitemap: ${siteUrl}/sitemap.xml`,
     `- LLM summary: ${siteUrl}/llms.txt`,
     "",
     "## Notes",
     "- Public data is readable without authentication.",
-    "- Admin editing requires TOTP verification and is not needed for normal visitors."
+    "- Discord OAuth is used for website sign-in.",
+    "- Staff actions are permission-gated and audit logged."
   ].join("\n");
 }
 
 function injectDynamicHeadMarkup(html, request, env) {
   const siteUrl = (env.PUBLIC_SITE_URL || new URL(request.url).origin).replace(/\/+$/g, "");
-  const pageUrl = `${siteUrl}/`;
+  const pageUrl = `${siteUrl}${getCanonicalPagePath(request)}`;
   const imageUrl = `${siteUrl}/og-image.png`;
 
   const markup = [
@@ -1185,7 +2351,17 @@ function injectDynamicHeadMarkup(html, request, env) {
     `<meta name="twitter:image:alt" content="BBTSL Blade Ball Value List preview image">`
   ].join("");
 
-  return html.replace("<!-- dynamic-meta -->", markup);
+  return html.replace('<meta name="bbtsl-dynamic-meta" content="">', markup);
+}
+
+function getCanonicalPagePath(request) {
+  const path = new URL(request.url).pathname.replace(/\/+$/, "") || "/";
+  const canonicalPaths = new Map([
+    ["/team.html", "/team"],
+    ["/privacy.html", "/privacy"],
+    ["/terms.html", "/terms"]
+  ]);
+  return canonicalPaths.get(path) || path;
 }
 
 function buildSitemapXml(request, env) {
@@ -1196,6 +2372,21 @@ function buildSitemapXml(request, env) {
     <loc>${siteUrl}/</loc>
     <changefreq>hourly</changefreq>
     <priority>1.0</priority>
+  </url>
+  <url>
+    <loc>${siteUrl}/team</loc>
+    <changefreq>daily</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>${siteUrl}/privacy</loc>
+    <changefreq>monthly</changefreq>
+    <priority>0.3</priority>
+  </url>
+  <url>
+    <loc>${siteUrl}/terms</loc>
+    <changefreq>monthly</changefreq>
+    <priority>0.3</priority>
   </url>
 </urlset>`;
 }
@@ -1215,6 +2406,36 @@ function withSecurityHeaders(response) {
     statusText: response.statusText,
     headers
   });
+}
+
+function enforceTrustedOrigin(request) {
+  const url = new URL(request.url);
+  const origin = request.headers.get("origin");
+  if (!origin) {
+    const referer = request.headers.get("referer");
+    if (!referer) {
+      throw new HttpError(403, "Missing same-origin context.");
+    }
+    let refererUrl;
+    try {
+      refererUrl = new URL(referer);
+    } catch {
+      throw new HttpError(403, "Invalid same-origin context.");
+    }
+    if (refererUrl.origin !== url.origin) {
+      throw new HttpError(403, "Cross-origin requests are not allowed.");
+    }
+    return;
+  }
+  if (origin !== url.origin) {
+    throw new HttpError(403, "Cross-origin requests are not allowed.");
+  }
+}
+
+function enforceAppRequest(request) {
+  if (request.headers.get(APP_REQUEST_HEADER) !== "1") {
+    throw new HttpError(403, "Invalid application request.");
+  }
 }
 
 function getClientIdentifier(request) {
@@ -1265,86 +2486,82 @@ async function consumeRateLimit(env, bucket, key, limit, windowSeconds) {
   `).bind(bucket, key).run();
 }
 
-async function ensureCoreSchema(env) {
-  if (!coreSchemaReadyPromise) {
-    coreSchemaReadyPromise = (async () => {
-      const statements = [
-        `CREATE TABLE IF NOT EXISTS swords (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          n TEXT NOT NULL,
-          c TEXT NOT NULL,
-          v INTEGER NOT NULL,
-          d TEXT NOT NULL,
-          t TEXT NOT NULL,
-          ct INTEGER,
-          u TEXT NOT NULL,
-          descr TEXT NOT NULL DEFAULT '',
-          image_key TEXT,
-          edited INTEGER NOT NULL DEFAULT 0 CHECK (edited IN (0, 1))
-        )`,
-        `CREATE TABLE IF NOT EXISTS sword_baseline (
-          id INTEGER PRIMARY KEY,
-          n TEXT NOT NULL,
-          c TEXT NOT NULL,
-          v INTEGER NOT NULL,
-          d TEXT NOT NULL,
-          t TEXT NOT NULL,
-          ct INTEGER,
-          u TEXT NOT NULL,
-          descr TEXT NOT NULL DEFAULT '',
-          image_key TEXT,
-          edited INTEGER NOT NULL DEFAULT 0 CHECK (edited IN (0, 1))
-        )`,
-        `CREATE TABLE IF NOT EXISTS sword_images (
-          image_key TEXT PRIMARY KEY,
-          content_type TEXT NOT NULL,
-          image_data BLOB NOT NULL,
-          updated_at TEXT NOT NULL
-        )`,
-        `CREATE TABLE IF NOT EXISTS admin_config (
-          config_key TEXT PRIMARY KEY,
-          secret TEXT NOT NULL,
-          issuer TEXT NOT NULL,
-          account_label TEXT NOT NULL,
-          digits INTEGER NOT NULL,
-          period INTEGER NOT NULL,
-          updated_at TEXT NOT NULL
-        )`,
-        `CREATE TABLE IF NOT EXISTS rate_limits (
-          bucket TEXT NOT NULL,
-          limiter_key TEXT NOT NULL,
-          request_count INTEGER NOT NULL DEFAULT 0,
-          window_start INTEGER NOT NULL,
-          PRIMARY KEY (bucket, limiter_key)
-        )`,
-        "CREATE INDEX IF NOT EXISTS idx_swords_category ON swords (c)",
-        "CREATE INDEX IF NOT EXISTS idx_swords_value ON swords (v DESC)",
-        "CREATE INDEX IF NOT EXISTS idx_sword_baseline_category ON sword_baseline (c)",
-        "CREATE INDEX IF NOT EXISTS idx_sword_images_updated_at ON sword_images (updated_at)",
-        "CREATE INDEX IF NOT EXISTS idx_rate_limits_window_start ON rate_limits (window_start)"
-      ];
-
-      for (const statement of statements) {
-        await env.DB.prepare(statement).run();
-      }
-    })().catch((error) => {
-      coreSchemaReadyPromise = null;
-      throw error;
-    });
-  }
-
-  await coreSchemaReadyPromise;
-}
-
 async function maybePruneRateLimits(env, now, windowSeconds) {
   if (Math.random() > 0.05) {
     return;
   }
-
   await env.DB.prepare(`
     DELETE FROM rate_limits
     WHERE window_start < ?
   `).bind(now - (windowSeconds * 4)).run();
+}
+
+function parseCookies(cookieHeader) {
+  const out = {};
+  for (const pair of cookieHeader.split(/;\s*/)) {
+    if (!pair) {
+      continue;
+    }
+    const separator = pair.indexOf("=");
+    if (separator <= 0) {
+      continue;
+    }
+    out[pair.slice(0, separator)] = pair.slice(separator + 1);
+  }
+  return out;
+}
+
+async function hmacHex(secret, value) {
+  if (!secret) {
+    throw new HttpError(500, "ADMIN_SESSION_SECRET is not configured.");
+  }
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const signature = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(value)));
+  return [...signature].map((part) => part.toString(16).padStart(2, "0")).join("");
+}
+
+function timingSafeEqual(left, right) {
+  if (typeof left !== "string" || typeof right !== "string" || left.length !== right.length) {
+    return false;
+  }
+  let result = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    result |= left.charCodeAt(index) ^ right.charCodeAt(index);
+  }
+  return result === 0;
+}
+
+function base64UrlEncode(value) {
+  const bytes = new TextEncoder().encode(value);
+  let binary = "";
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function base64UrlDecode(value) {
+  const padded = value.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - value.length % 4) % 4);
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return new TextDecoder().decode(bytes);
+}
+
+function currentDateString() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function currentIsoString() {
+  return new Date().toISOString();
 }
 
 class HttpError extends Error {

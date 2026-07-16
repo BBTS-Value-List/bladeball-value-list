@@ -5,17 +5,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="darkreader-lock">
   <title>BBTSL Blade Ball Value List</title>
-  <meta name="description" content="Tracked values for rare Blade Ball swords with demand, trend, known count, and image-backed entries.">
+  <meta name="description" content="Tracked values for rare Blade Ball swords with demand, trend, known count, and media-backed entries.">
   <meta name="theme-color" content="#12151a">
   <meta name="color-scheme" content="dark">
   <meta name="robots" content="index,follow">
   <meta property="og:title" content="BBTSL Blade Ball Value List">
-  <meta property="og:description" content="Tracked Blade Ball sword values, demand, trend, and count in one place.">
+  <meta property="og:description" content="Tracked Blade Ball sword values, demand, trend, count, and previews in one place.">
   <meta property="og:type" content="website">
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="BBTSL Blade Ball Value List">
-  <meta name="twitter:description" content="Tracked Blade Ball sword values, demand, trend, and count in one place.">
-  <!-- dynamic-meta -->
+  <meta name="twitter:description" content="Tracked Blade Ball sword values, demand, trend, count, and previews in one place.">
+  <meta name="bbtsl-dynamic-meta" content="">
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none'%3E%3Crect width='24' height='24' rx='5' fill='%2312151a'/%3E%3Cpath d='M4 20L15 9M15 9L13 3L21 5L19 11L15 9Z' stroke='%23ff8a3d' stroke-width='1.8' stroke-linejoin='round'/%3E%3Ccircle cx='4' cy='20' r='1.4' fill='%23ff8a3d'/%3E%3C/svg%3E">
   <link rel="apple-touch-icon" href="/og-image.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -27,22 +27,23 @@
 <body>
   <a class="skip-link" href="#mainContent">Skip to value list</a>
   <div class="topbar">
-    <div class="brand">
+    <a class="brand" href="https://bbtsl.lol" aria-label="Go to BBTSL home">
       <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 20L15 9M15 9L13 3L21 5L19 11L15 9Z" stroke="#ff8a3d" stroke-width="1.6" stroke-linejoin="round"/><circle cx="4" cy="20" r="1.4" fill="#ff8a3d"/></svg>
       <div class="brand-text">
-        <div class="name">BBTSL</div>
+        <div class="name">BBTSL.LOL</div>
         <div class="sub">Blade Ball Value List</div>
       </div>
-    </div>
-    <div class="topbar-actions">
-      <div class="topbar-meta">Last Updated: <span id="lastUpdated">July 13, 2026</span></div>
+    </a>
+    <div class="topbar-actions" id="topbarActions">
+      <a class="top-link" href="/team">Team</a>
+      <div class="topbar-meta">Last Updated: <span id="lastUpdated">Unavailable</span></div>
     </div>
   </div>
 
   <main id="mainContent">
     <section class="headline-shell" aria-labelledby="pageTitle">
       <h1 id="pageTitle" class="page-title">Blade Ball sword values</h1>
-      <p class="page-copy">Track demand, trend, count, and latest value snapshots for rare Blade Ball swords in one searchable list.</p>
+      <p class="page-copy">Track demand, trend, count, slash media, and latest value snapshots for rare Blade Ball swords in one searchable list.</p>
     </section>
 
     <section class="controls-shell">
@@ -73,108 +74,242 @@
     <div class="empty" id="empty" role="status">No swords match that search.</div>
   </main>
 
+  <div class="utility-dock utility-dock-left" id="auditDock"></div>
+  <div class="utility-dock utility-dock-right" id="identityDock"></div>
+  <button class="mobile-utility-trigger" id="mobileUtilityTrigger" type="button" aria-label="Open utility panel" hidden>
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 7.75A1.75 1.75 0 0 1 5.75 6h4.1c.46 0 .9.182 1.226.507l1.168 1.168c.328.328.772.513 1.236.513h4.77A1.75 1.75 0 0 1 20 9.938v8.312A1.75 1.75 0 0 1 18.25 20h-12.5A1.75 1.75 0 0 1 4 18.25V7.75Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M4 10h16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+  </button>
+
+  <div class="modal-overlay mobile-utility-overlay" id="mobileUtilityOverlay" hidden>
+    <div class="modal mobile-utility-modal" role="dialog" aria-modal="true" aria-labelledby="mobileUtilityTitle">
+      <button class="modal-close" id="mobileUtilityCloseBtn" type="button" aria-label="Close utility panel">×</button>
+      <h2 id="mobileUtilityTitle">Utilities</h2>
+      <div class="mobile-utility-stack">
+        <div class="mobile-utility-slot" id="mobileAuditDock"></div>
+        <div class="mobile-utility-slot" id="mobileIdentityDock"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="shortcutLoginOverlay" hidden>
+    <div class="modal shortcut-login-modal" role="dialog" aria-modal="true" aria-labelledby="shortcutLoginTitle" aria-describedby="shortcutLoginCopy">
+      <button class="modal-close" id="shortcutLoginCloseBtn" type="button" aria-label="Close login dialog">×</button>
+      <h2 id="shortcutLoginTitle">Sign in with Discord</h2>
+      <p class="auth-copy" id="shortcutLoginCopy">Sign in to use the BBTSL tools assigned to your Discord role. Browsing values stays public.</p>
+      <div class="modal-actions shortcut-login-actions">
+        <button class="btn-cancel" id="shortcutLoginCancelBtn" type="button">Cancel</button>
+        <button class="btn-save" id="shortcutLoginBtn" type="button">Login with Discord</button>
+      </div>
+    </div>
+  </div>
+
   <footer class="site-footer">
     <p class="footer-copy">Values are community-tracked and may shift as availability and demand change. BBTSL is an unofficial project and is not affiliated with Roblox, Blade Ball, their owners, or their respective copyright holders.</p>
     <p class="footer-line"><span class="footer-label">Credits</span><span class="footer-items">PVEstrap - <a href="https://github.com/PVEstrap" target="_blank" rel="noreferrer">GitHub</a> / <a href="https://pvestrap.com" target="_blank" rel="noreferrer">Website</a> <span class="footer-sep">|</span> Kronos - <a href="https://pve.bio/kronos" target="_blank" rel="noreferrer">Website</a> <span class="footer-sep">|</span> Basic - <a href="https://github.com/06basic" target="_blank" rel="noreferrer">GitHub</a></span></p>
-    <p class="footer-line"><span class="footer-label">Links</span><span class="footer-items"><a href="https://www.roblox.com/games/13772394625/Blade-Ball" target="_blank" rel="noreferrer">Blade Ball Experience</a> <span class="footer-sep">|</span> Contact BBTSL through the credited people above or at <a href="mailto:bbtsl@pve.bio">bbtsl@pve.bio</a>.</span></p>
+    <p class="footer-line"><span class="footer-label">Links</span><span class="footer-items"><a href="https://www.roblox.com/games/13772394625/Blade-Ball" target="_blank" rel="noreferrer">Blade Ball Experience</a> <span class="footer-sep">|</span> <a href="/team">Team</a> <span class="footer-sep">|</span> <a href="/privacy">Privacy</a> <span class="footer-sep">|</span> <a href="/terms">Terms</a> <span class="footer-sep">|</span> Contact BBTSL through the credited people above or at <a href="mailto:bbtsl@pve.bio">bbtsl@pve.bio</a>.</span></p>
     <p class="footer-line"><span class="footer-label">Notice</span><span class="footer-items">This site is provided <strong class="footer-emphasis">as-is</strong> for informational use. Value entries, counts, and demand notes may change without notice and <strong class="footer-emphasis">should not</strong> be treated as guaranteed, official, or final.</span></p>
   </footer>
 
-  <div class="modal-overlay" id="modalOverlay" hidden>
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle" aria-describedby="editModalDescription">
-      <h2 id="modalTitle">Edit Sword</h2>
-      <p id="editModalDescription" class="sr-only">Edit sword details, image, and description.</p>
-      <form id="editForm">
-        <div class="field">
-          <label for="f-name">Name</label>
-          <input type="text" id="f-name" required>
-        </div>
-        <div class="field">
-          <label for="f-cat">Category</label>
-          <select id="f-cat">
-            <option value="LTM">LTM</option>
-            <option value="Ranked">Ranked</option>
-            <option value="Top Spenders">Top Spenders</option>
-            <option value="Other Swords">Other Swords</option>
-            <option value="Explosions">Explosions</option>
-          </select>
-        </div>
-        <div class="field">
-          <label for="f-value">Value</label>
-          <input type="number" id="f-value" min="0" max="10000000" step="1000">
-        </div>
-        <div class="field">
-          <label for="f-demand">Demand</label>
-          <select id="f-demand">
-            <option value="Very High">Very High</option>
-            <option value="High">High</option>
-            <option value="Medium">Medium</option>
-            <option value="Low">Low</option>
-            <option value="N/A">N/A</option>
-          </select>
-        </div>
-        <div class="field">
-          <label for="f-trend">Trend</label>
-          <select id="f-trend">
-            <option value="Rising">Rising</option>
-            <option value="Falling">Falling</option>
-            <option value="Stable">Stable</option>
-            <option value="Manipulated">Manipulated</option>
-            <option value="N/A">N/A</option>
-          </select>
-        </div>
-        <div class="field">
-          <label for="f-count">Count</label>
-          <input type="number" id="f-count" min="0" step="1">
-        </div>
-        <div class="field">
-          <label for="f-image">Image</label>
-          <div id="f-image-preview" class="image-preview">No image</div>
-          <input type="file" id="f-image" accept="image/*">
-          <button id="f-image-remove" class="text-link" type="button" hidden>Remove image</button>
-        </div>
-        <div class="field">
-          <label for="f-desc">Description</label>
-          <textarea id="f-desc"></textarea>
-        </div>
-        <div class="modal-actions">
-          <button type="button" class="btn-delete" id="deleteBtn" hidden>Delete</button>
-          <button type="button" class="btn-cancel" id="cancelBtn">Cancel</button>
-          <button type="submit" class="btn-save">Save Changes</button>
-        </div>
-      </form>
+  <div class="modal-overlay" id="detailModalOverlay" hidden>
+    <div class="modal modal-split" role="dialog" aria-modal="true" aria-labelledby="detailModalTitle">
+      <button class="modal-close" id="detailCloseBtn" type="button" aria-label="Close modal">×</button>
+      <div class="modal-split-layout">
+        <section class="modal-panel modal-panel-edit" id="editPanel" hidden>
+          <h2 id="detailModalTitle">Edit Sword</h2>
+          <p class="panel-copy">Authorized users can update only the currently selected sword here.</p>
+          <form id="editForm">
+            <div class="field">
+              <label for="f-name">Name</label>
+              <input type="text" id="f-name" required>
+            </div>
+            <div class="field">
+              <label for="f-cat">Category</label>
+              <select id="f-cat">
+                <option value="LTM">LTM</option>
+                <option value="Ranked">Ranked</option>
+                <option value="Top Spenders">Top Spenders</option>
+                <option value="Other Swords">Other Swords</option>
+                <option value="Explosions">Explosions</option>
+              </select>
+            </div>
+            <div class="field-grid">
+              <div class="field">
+                <label for="f-value">Value</label>
+                <input type="number" id="f-value" min="0" max="10000000" step="1000">
+              </div>
+              <div class="field">
+                <label for="f-count">Count</label>
+                <input type="number" id="f-count" min="0" step="1">
+              </div>
+            </div>
+            <div class="field-grid">
+              <div class="field">
+                <label for="f-demand">Demand</label>
+                <select id="f-demand">
+                  <option value="Very High">Very High</option>
+                  <option value="High">High</option>
+                  <option value="Medium">Medium</option>
+                  <option value="Low">Low</option>
+                  <option value="N/A">N/A</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="f-trend">Trend</label>
+                <select id="f-trend">
+                  <option value="Rising">Rising</option>
+                  <option value="Falling">Falling</option>
+                  <option value="Stable">Stable</option>
+                  <option value="Manipulated">Manipulated</option>
+                  <option value="N/A">N/A</option>
+                </select>
+              </div>
+            </div>
+            <div class="field">
+              <label for="f-image">Card Media</label>
+              <div id="f-image-preview" class="image-preview">No media</div>
+              <input type="file" id="f-image" accept="image/png,image/jpeg,image/webp,image/gif,video/mp4">
+              <button id="f-image-remove" class="text-link" type="button" hidden>Remove card media</button>
+            </div>
+            <div class="field">
+              <label for="f-detail-media">Item Detail Media</label>
+              <div id="f-detail-preview" class="image-preview">No media</div>
+              <input type="file" id="f-detail-media" accept="image/png,image/jpeg,image/webp,image/gif,video/mp4">
+              <button id="f-detail-remove" class="text-link" type="button" hidden>Remove item detail media</button>
+            </div>
+            <div class="field">
+              <label for="f-slash-media">Slash Media</label>
+              <div id="f-slash-preview" class="image-preview">No media</div>
+              <input type="file" id="f-slash-media" accept="image/png,image/jpeg,image/webp,image/gif,video/mp4">
+              <button id="f-slash-remove" class="text-link" type="button" hidden>Remove slash media</button>
+            </div>
+            <div class="field">
+              <label for="f-slash-audio">Slash Audio</label>
+              <div id="f-audio-preview" class="image-preview">No audio</div>
+              <input type="file" id="f-slash-audio" accept="audio/mpeg,audio/mp3,audio/ogg,audio/wav">
+              <button id="f-audio-remove" class="text-link" type="button" hidden>Remove slash audio</button>
+            </div>
+            <div class="field">
+              <label for="f-desc">Description</label>
+              <textarea id="f-desc"></textarea>
+            </div>
+            <div class="modal-actions">
+              <button type="button" class="btn-delete" id="deleteBtn" hidden>Delete</button>
+              <button type="button" class="btn-cancel" id="cancelBtn">Cancel</button>
+              <button type="submit" class="btn-save" id="editSaveBtn">Save Changes</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="modal-panel modal-panel-detail">
+          <div class="detail-layout">
+            <section class="detail-info-column">
+              <div class="detail-title-row">
+                <h2 class="detail-title" id="detailTitle">Sword Detail</h2>
+                <span class="cat-badge detail-category-badge" id="detailCategory">Category</span>
+              </div>
+              <div class="detail-thumb-wrap" id="detailThumbWrap"></div>
+              <div class="detail-stat-grid detail-stat-grid-compact">
+                <div class="detail-stat"><span class="detail-stat-label">Demand</span><strong id="detailDemand">N/A</strong></div>
+                <div class="detail-stat"><span class="detail-stat-label">Trend</span><strong id="detailTrend">N/A</strong></div>
+                <div class="detail-stat"><span class="detail-stat-label">Count</span><strong id="detailCount">-</strong></div>
+              </div>
+              <div class="detail-value-block card-value" id="detailValue"><img class="value-token" src="/token.svg" alt="" aria-hidden="true">0</div>
+              <div class="detail-description-block">
+                <p class="detail-description" id="detailDescription">No description is available for this item yet.</p>
+              </div>
+              <div class="detail-meta-line"><span id="detailUpdated">Updated</span><span class="detail-card-id" id="detailCardId">#------</span></div>
+            </section>
+            <section class="detail-preview-column">
+              <div class="detail-media-grid detail-media-grid-large" id="detailMediaGrid">
+                <div class="detail-media-card detail-media-card-primary" id="detailPrimaryCard">
+                  <div class="detail-media-head">
+                    <div class="detail-media-label">VFX Preview</div>
+                    <a class="detail-media-download" id="detailPrimaryDownload" href="#" download aria-label="Download VFX preview" hidden>
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path fill="currentColor" d="M12 3.75a.9.9 0 0 1 .9.9v7.877l2.764-2.764a.9.9 0 1 1 1.272 1.273l-4.3 4.3a.9.9 0 0 1-1.272 0l-4.3-4.3a.9.9 0 1 1 1.272-1.273L11.1 12.527V4.65a.9.9 0 0 1 .9-.9Zm-6.15 12.6a.9.9 0 0 1 .9.9v1.2h10.5v-1.2a.9.9 0 0 1 1.8 0v2.1a.9.9 0 0 1-.9.9H5.85a.9.9 0 0 1-.9-.9v-2.1a.9.9 0 0 1 .9-.9Z"/>
+                      </svg>
+                    </a>
+                  </div>
+                  <div id="detailPrimaryMedia" class="detail-media-shell"></div>
+                </div>
+                <div class="detail-media-card detail-media-card-slash" id="detailSlashCard">
+                  <div class="detail-media-head">
+                    <div class="detail-media-label">Slash Preview</div>
+                    <a class="detail-media-download" id="detailSlashDownload" href="#" download aria-label="Download slash preview" hidden>
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path fill="currentColor" d="M12 3.75a.9.9 0 0 1 .9.9v7.877l2.764-2.764a.9.9 0 1 1 1.272 1.273l-4.3 4.3a.9.9 0 0 1-1.272 0l-4.3-4.3a.9.9 0 1 1 1.272-1.273L11.1 12.527V4.65a.9.9 0 0 1 .9-.9Zm-6.15 12.6a.9.9 0 0 1 .9.9v1.2h10.5v-1.2a.9.9 0 0 1 1.8 0v2.1a.9.9 0 0 1-.9.9H5.85a.9.9 0 0 1-.9-.9v-2.1a.9.9 0 0 1 .9-.9Z"/>
+                      </svg>
+                    </a>
+                  </div>
+                  <div id="detailSlashMedia" class="detail-media-shell"></div>
+                </div>
+                <div class="detail-media-card detail-media-card-audio detail-media-card-audio-slim">
+                  <div class="detail-media-label">SFX Preview</div>
+                  <div id="detailSlashAudio" class="detail-media-shell"></div>
+                </div>
+              </div>
+            </section>
+          </div>
+        </section>
+      </div>
     </div>
   </div>
 
-  <div class="modal-overlay" id="authModalOverlay" hidden>
-    <div class="modal auth-modal" role="dialog" aria-modal="true" aria-labelledby="authModalTitle" aria-describedby="authModalDescription">
-      <h2 id="authModalTitle">Admin Verification</h2>
-      <p class="auth-copy" id="authModalDescription">Enter the current 6-digit code from the shared Google Authenticator or any compatible authenticator app.</p>
-      <form id="authForm">
-        <div class="field">
-          <label for="authCode">Authenticator code</label>
-          <input
-            type="text"
-            id="authCode"
-            inputmode="numeric"
-            autocomplete="one-time-code"
-            maxlength="6"
-            placeholder="000000"
-            pattern="[0-9]{6}"
-            autocapitalize="off"
-            spellcheck="false"
-            required
-          >
+  <div class="modal-overlay" id="auditModalOverlay" hidden>
+    <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="auditModalTitle">
+      <button class="modal-close" id="auditCloseBtn" type="button" aria-label="Close audit modal">×</button>
+      <h2 id="auditModalTitle">Audit Log Explorer</h2>
+      <div class="audit-controls control-surface">
+        <div class="audit-control-field audit-control-field-search">
+          <label class="sr-only" for="auditSearch">Search audit logs</label>
+          <input id="auditSearch" type="text" placeholder="Search summary, card ID, or field">
         </div>
-        <p class="auth-error" id="authError" hidden></p>
-        <div class="modal-actions">
-          <button type="button" class="btn-cancel" id="authCancelBtn">Cancel</button>
-          <button type="submit" class="btn-save" id="authSubmitBtn">Verify</button>
+        <div class="audit-control-field">
+          <label class="sr-only" for="auditActionType">Filter audit action</label>
+          <select id="auditActionType">
+            <option value="">All actions</option>
+            <option value="sword.create">Created swords</option>
+            <option value="sword.update">Updated swords</option>
+            <option value="sword.delete">Deleted swords</option>
+            <option value="data.reset">Resets</option>
+            <option value="audit.revert">Reverts</option>
+          </select>
         </div>
-      </form>
+        <div class="audit-control-field">
+          <label class="sr-only" for="auditCardId">Filter by card ID</label>
+          <input id="auditCardId" type="text" placeholder="#AAA111">
+        </div>
+        <div class="audit-control-field" id="auditActorUserWrap" hidden>
+          <label class="sr-only" for="auditActorUser">Filter by user</label>
+          <select id="auditActorUser">
+            <option value="">All users</option>
+          </select>
+        </div>
+        <button class="tbtn" id="auditRefreshBtn" type="button">Refresh</button>
+      </div>
+      <div class="audit-list" id="auditList"></div>
     </div>
   </div>
 
-  <script src="/app.js"></script>
+  <div class="modal-overlay" id="confirmModalOverlay" hidden>
+    <div class="modal confirm-modal" role="dialog" aria-modal="true" aria-labelledby="confirmModalTitle">
+      <button class="modal-close" id="confirmCloseBtn" type="button" aria-label="Close confirmation modal">×</button>
+      <h2 id="confirmModalTitle">Protected Action</h2>
+      <p class="confirm-copy" id="confirmModalCopy">Complete Discord re-authentication and type the exact confirmation phrase.</p>
+      <div class="confirm-actions">
+        <button class="tbtn" id="confirmReauthBtn" type="button">Re-auth with Discord</button>
+      </div>
+      <div class="field">
+        <label for="confirmPhraseInput">Confirmation phrase</label>
+        <input id="confirmPhraseInput" type="text" autocomplete="off">
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn-cancel" id="confirmCancelBtn">Cancel</button>
+        <button type="button" class="btn-save" id="confirmSubmitBtn" disabled>Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/app.js"></script>
 </body>
 </html>

@@ -1,39 +1,21 @@
 # Security Policy
 
-## Reporting A Vulnerability
+## Reporting a vulnerability
 
-Do not report security issues in public GitHub issues, discussions, or pull requests.
+Do not report vulnerabilities in public issues, discussions, pull requests, or social posts. Email [bbtsl@pve.bio](mailto:bbtsl@pve.bio) instead.
 
-Send reports to:
-
-- [bbtsl@pve.bio](mailto:bbtsl@pve.bio)
-
-Include:
-
-- affected URL, endpoint, or file
-- clear reproduction steps
-- impact summary
-- screenshots or request samples if useful
+Include the affected URL, endpoint, file, or commit; the required access level; safe reproduction steps; expected impact; and any relevant screenshots or request samples. Do not include credentials, session cookies, owner keys, OAuth tokens, or destructive proof-of-concept traffic.
 
 ## Scope
 
-Security reports are especially relevant for:
+Security reports are especially relevant to:
 
-- admin authentication
-- session handling
-- upload handling
-- image delivery
-- worker API routes
-- rate limiting
-- header and CSP handling
+- Discord OAuth, sessions, and role authorization
+- owner-only operations and audit trails
+- media upload, storage, and delivery
+- Worker API routes, D1 access, rate limiting, and request validation
+- security headers and content-security policy
 
-## Response Expectations
+## Handling
 
-- Initial acknowledgement target: 7 days
-- Fix timing depends on severity, impact, and reproducibility
-
-## Handling Notes
-
-- Do not post proof-of-concept exploits publicly before a fix is available
-- Keep secrets, tokens, and private configuration out of reports unless absolutely required
-- Local preview credentials and development-only secrets should still be treated as sensitive and not shared publicly
+The project aims to acknowledge valid reports within seven days. Fix timing depends on severity, impact, and reproducibility. Please avoid denial-of-service testing, production data changes, and public disclosure until a fix is available.

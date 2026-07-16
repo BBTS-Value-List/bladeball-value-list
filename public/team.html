@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="darkreader-lock">
+  <title>BBTSL Team</title>
+  <meta name="description" content="Meet the BBTSL contributors, editors, maintainers, administrators, developers, and owners.">
+  <meta name="theme-color" content="#12151a">
+  <meta name="color-scheme" content="dark">
+  <meta name="bbtsl-dynamic-meta" content="">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none'%3E%3Crect width='24' height='24' rx='5' fill='%2312151a'/%3E%3Cpath d='M4 20L15 9M15 9L13 3L21 5L19 11L15 9Z' stroke='%23ff8a3d' stroke-width='1.8' stroke-linejoin='round'/%3E%3Ccircle cx='4' cy='20' r='1.4' fill='%23ff8a3d'/%3E%3C/svg%3E">
+  <link rel="apple-touch-icon" href="/og-image.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="team-page">
+  <a class="skip-link" href="#teamMain">Skip to team list</a>
+  <div class="topbar">
+    <a class="brand" href="https://bbtsl.lol" aria-label="Go to BBTSL home">
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 20L15 9M15 9L13 3L21 5L19 11L15 9Z" stroke="#ff8a3d" stroke-width="1.6" stroke-linejoin="round"/><circle cx="4" cy="20" r="1.4" fill="#ff8a3d"/></svg>
+      <div class="brand-text">
+        <div class="name">BBTSL.LOL</div>
+        <div class="sub">Team Directory</div>
+      </div>
+    </a>
+    <div class="topbar-actions">
+      <a class="top-link" href="/">Value List</a>
+    </div>
+  </div>
+
+  <main id="teamMain" class="team-main">
+    <section class="team-hero">
+      <h1>Meet the BBTSL Team</h1>
+      <p>For transparency, the public team directory shows every assigned contributor and staff member role.</p>
+    </section>
+
+    <section class="team-grid" id="teamGrid" aria-live="polite"></section>
+
+    <section id="teamManageHost"></section>
+  </main>
+
+  <footer class="site-footer team-footer">
+    <p class="footer-copy">Values are community-tracked and may shift as availability and demand change. BBTSL is an unofficial project and is not affiliated with Roblox, Blade Ball, their owners, or their respective copyright holders.</p>
+    <p class="footer-line"><span class="footer-label">Credits</span><span class="footer-items">PVEstrap - <a href="https://github.com/PVEstrap" target="_blank" rel="noreferrer">GitHub</a> / <a href="https://pvestrap.com" target="_blank" rel="noreferrer">Website</a> <span class="footer-sep">|</span> Kronos - <a href="https://pve.bio/kronos" target="_blank" rel="noreferrer">Website</a> <span class="footer-sep">|</span> Basic - <a href="https://github.com/06basic" target="_blank" rel="noreferrer">GitHub</a></span></p>
+    <p class="footer-line"><span class="footer-label">Links</span><span class="footer-items"><a href="https://www.roblox.com/games/13772394625/Blade-Ball" target="_blank" rel="noreferrer">Blade Ball Experience</a> <span class="footer-sep">|</span> <a href="/">Value List</a> <span class="footer-sep">|</span> <a href="/privacy">Privacy</a> <span class="footer-sep">|</span> <a href="/terms">Terms</a> <span class="footer-sep">|</span> Contact BBTSL through the credited people above or at <a href="mailto:bbtsl@pve.bio">bbtsl@pve.bio</a>.</span></p>
+    <p class="footer-line"><span class="footer-label">Notice</span><span class="footer-items">This site is provided <strong class="footer-emphasis">as-is</strong> for informational use. Value entries, counts, and demand notes may change without notice and <strong class="footer-emphasis">should not</strong> be treated as guaranteed, official, or final.</span></p>
+  </footer>
+
+  <div class="utility-dock utility-dock-right" id="teamIdentityDock"></div>
+  <button class="mobile-utility-trigger" id="teamMobileUtilityTrigger" type="button" aria-label="Open utility panel" hidden>
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 7.75A1.75 1.75 0 0 1 5.75 6h4.1c.46 0 .9.182 1.226.507l1.168 1.168c.328.328.772.513 1.236.513h4.77A1.75 1.75 0 0 1 20 9.938v8.312A1.75 1.75 0 0 1 18.25 20h-12.5A1.75 1.75 0 0 1 4 18.25V7.75Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M4 10h16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+  </button>
+  <div class="modal-overlay mobile-utility-overlay" id="teamMobileUtilityOverlay" hidden>
+    <div class="modal mobile-utility-modal" role="dialog" aria-modal="true" aria-labelledby="teamMobileUtilityTitle">
+      <button class="modal-close" id="teamMobileUtilityCloseBtn" type="button" aria-label="Close utility panel">×</button>
+      <h2 id="teamMobileUtilityTitle">Utilities</h2>
+      <div class="mobile-utility-stack">
+        <div class="mobile-utility-slot" id="teamMobileIdentityDock"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="teamShortcutLoginOverlay" hidden>
+    <div class="modal shortcut-login-modal" role="dialog" aria-modal="true" aria-labelledby="teamShortcutLoginTitle" aria-describedby="teamShortcutLoginCopy">
+      <button class="modal-close" id="teamShortcutLoginCloseBtn" type="button" aria-label="Close login dialog">×</button>
+      <h2 id="teamShortcutLoginTitle">Sign in with Discord</h2>
+      <p class="auth-copy" id="teamShortcutLoginCopy">Sign in to use the BBTSL tools assigned to your Discord role. Browsing values stays public.</p>
+      <div class="modal-actions shortcut-login-actions">
+        <button class="btn-cancel" id="teamShortcutLoginCancelBtn" type="button">Cancel</button>
+        <button class="btn-save" id="teamShortcutLoginBtn" type="button">Login with Discord</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/team.js"></script>
+</body>
+</html>

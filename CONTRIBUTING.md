@@ -1,54 +1,43 @@
 # Contributing
 
-## Before You Start
+## Scope and style
 
-This project is small and intentionally opinionated. Keep changes tight, readable, and directly related to the live site or worker.
+Keep changes narrow, readable, and directly related to the public site or Worker. Follow the existing vanilla ESM style: two-space indentation, semicolons, focused lower-camel helper names, explicit validation, and self-explanatory code without comments that restate it.
 
-## Setup
+Do not add one-time migrations, local-state importers, database snapshots, generated media, or unrelated dependencies to the public repository.
 
-Requirements:
+## Local checks
 
-- Node.js 20 or newer
-- npm
-- Cloudflare access if you need to run or deploy the Worker against real resources
-
-Install dependencies:
+Before opening a pull request, run the checks that apply to your change:
 
 ```powershell
-npm install
+npm run check
+npx wrangler deploy --dry-run
+npm audit
+git diff --check
 ```
 
-Run locally:
+For UI changes, run the local Worker and verify the affected route. Include a screenshot in the pull request when the visual result changes.
 
-```powershell
-npm run cf:dev
-```
+## Data, media, and role changes
 
-## Change Rules
+- Explain each item-data correction and include a public source or clear evidence.
+- Keep public item text suitable for a public website.
+- Test media uploads and detail rendering when changing media handling.
+- Treat staff roles, audit history, owner operations, and remote D1 mutations as maintainer-only work. Do not run a remote mutation tool unless the task explicitly requires it.
 
-- Do not commit real secrets, `.env`, `.dev.vars`, or any private credential
-- Do not reintroduce one-time migration files or obsolete setup payloads
-- Keep public UI changes consistent with the existing visual language
-- Keep worker changes defensive and explicit
-- Do not add third-party packages without a clear need
+## Secrets and security
 
-## Data And Content Changes
+- Never commit `.env`, `.dev.vars`, credentials, OAuth secrets, owner keys, session secrets, or local database state.
+- Use Cloudflare secrets for deployed credentials.
+- Review [SECURITY.md](./SECURITY.md) for changes involving authentication, authorization, uploads, media, or request handling.
 
-If you are changing sword entries, descriptions, values, or images:
+## Pull requests
 
-- state exactly what changed
-- explain the source of the correction
-- mention whether the change affects public display, admin editing, or both
+Every pull request must state:
 
-## Pull Requests
-
-Every pull request should include:
-
-- what changed
-- why it changed
-- how it was checked locally
-- screenshots for visible UI changes when relevant
-
-## Security
-
-If your change touches auth, upload handling, or request security, review [SECURITY.md](./SECURITY.md) before opening the pull request.
+- what changed and why
+- local checks performed
+- affected routes or APIs
+- any data or configuration impact
+- screenshots for visible UI changes

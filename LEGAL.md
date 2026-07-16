@@ -23,6 +23,10 @@ The website and repository are provided as-is for informational use.
 
 Values, counts, demand notes, descriptions, and availability information may change without notice and should not be treated as guaranteed, official, or final.
 
+## Website Terms And Privacy
+
+The live [Terms of Service](https://bbtsl.lol/terms) govern use of the website and public API. The live [Privacy Policy](https://bbtsl.lol/privacy) explains how the website handles personal data. Those pages control if they conflict with this repository notice.
+
 ## Contact
 
 You can contact BBTSL through the credited people in the site footer or by email at [bbtsl@pve.bio](mailto:bbtsl@pve.bio).

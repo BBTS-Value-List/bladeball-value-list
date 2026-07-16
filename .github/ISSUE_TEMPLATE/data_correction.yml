@@ -26,4 +26,6 @@ body:
     id: evidence
     attributes:
       label: Evidence or source
-      description: Explain why the correction should be accepted
+      description: Provide public source links, screenshots, or a clear explanation. Do not include private account details.
+    validations:
+      required: true

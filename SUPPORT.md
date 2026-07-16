@@ -1,20 +1,12 @@
 # Support
 
-## Contact Paths
+## Where to ask
 
-- General project contact: [bbtsl@pve.bio](mailto:bbtsl@pve.bio)
-- Security reports: follow [SECURITY.md](./SECURITY.md)
+- Use GitHub issue forms for public bugs, feature requests, and item-data corrections.
+- Email [bbtsl@pve.bio](mailto:bbtsl@pve.bio) for security, rights, sensitive account, or team-role access concerns.
 
-## Use The Right Channel
+## Include useful detail
 
-- Use GitHub issues for bugs, feature requests, and data corrections
-- Use email for vulnerabilities, rights concerns, or anything sensitive
+For public reports, include the affected page or API route, a concise description, repeatable steps when applicable, screenshots for visual problems, and the exact item or card ID for data corrections.
 
-## Before Reaching Out
-
-Include enough detail to act on the report:
-
-- affected page, route, or file
-- screenshots if the issue is visual
-- steps to reproduce if the issue is technical
-- the exact sword or entry if the issue is data-related
+Do not include credentials, session material, private Discord details, or owner keys in a public issue.
