@@ -1,4 +1,6 @@
 const API_BASE = "/api";
+const LOGIN_SHORTCUT_CODE = "KeyL";
+const TEAM_FETCH_CREDENTIALS = "same-origin";
 const ROLE_ORDER = ["Owner", "Developer", "Administrator", "Maintainer", "Editor", "Contributor"];
 const LOGOUT_ICON = `
   <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -39,7 +41,7 @@ async function api(path, options = {}) {
   if ((options.method || "GET") !== "GET") {
     headers["x-bbts-request"] = "1";
   }
-  const response = await fetch(`${API_BASE}${path}`, { credentials: "same-origin", ...options, headers });
+  const response = await fetch(`${API_BASE}${path}`, { credentials: TEAM_FETCH_CREDENTIALS, ...options, headers });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new Error(body.error || "Request failed.");
@@ -83,7 +85,7 @@ function renderTeam() {
         <div class="team-role-list">
           ${group.members.map((member) => `
             <article class="team-member-card">
-              ${member.avatarUrl ? `<img class="team-member-avatar" src="${escapeHtmlAttr(member.avatarUrl)}" alt="${escapeHtmlAttr(member.displayName)}">` : '<div class="team-member-avatar team-member-avatar-fallback">?</div>'}
+              ${buildTeamMemberAvatarMarkup(member)}
               <div class="team-member-copy">
                 <h2>${escapeHtml(member.displayName)}</h2>
                 <div class="team-member-handle">${escapeHtml(member.handle || member.displayName)}</div>
@@ -94,6 +96,34 @@ function renderTeam() {
       </section>
     `)
     .join("");
+  bindTeamMemberAvatarAnimations();
+}
+
+function buildTeamMemberAvatarMarkup(member) {
+  if (!member.avatarUrl) {
+    return '<div class="team-member-avatar team-member-avatar-fallback">?</div>';
+  }
+  const animatedAvatarUrl = getAnimatedAvatarUrl(member.avatarUrl);
+  const staticAvatarUrl = animatedAvatarUrl ? member.avatarUrl.replace(/\.gif(?=\?|$)/i, ".webp") : member.avatarUrl;
+  const animatedAvatarAttribute = animatedAvatarUrl ? ` data-animated-avatar="${escapeHtmlAttr(animatedAvatarUrl)}"` : "";
+  return `<img class="team-member-avatar" src="${escapeHtmlAttr(staticAvatarUrl)}"${animatedAvatarAttribute} alt="${escapeHtmlAttr(member.displayName)}">`;
+}
+
+function getAnimatedAvatarUrl(avatarUrl) {
+  return /\.gif(?:\?|$)/i.test(avatarUrl) ? avatarUrl : "";
+}
+
+function bindTeamMemberAvatarAnimations() {
+  dom.teamGrid.querySelectorAll("[data-animated-avatar]").forEach((avatar) => {
+    const staticAvatarUrl = avatar.src;
+    const animatedAvatarUrl = avatar.dataset.animatedAvatar;
+    avatar.addEventListener("pointerenter", () => {
+      avatar.src = animatedAvatarUrl;
+    });
+    avatar.addEventListener("pointerleave", () => {
+      avatar.src = staticAvatarUrl;
+    });
+  });
 }
 
 function renderManage() {
@@ -154,7 +184,10 @@ function renderManage() {
   const teamCreateStatus = document.getElementById("teamCreateStatus");
   const teamManageList = document.getElementById("teamManageList");
 
-  teamManageList.innerHTML = state.team.map(buildManagedTeamMemberMarkup).join("");
+  teamManageList.innerHTML = state.team
+    .filter((member) => member.role !== "Viewer")
+    .map(buildManagedTeamMemberMarkup)
+    .join("");
   bindManagedTeamMemberForms(teamManageList);
   bindTeamCreateForm({
     teamCreateForm,
@@ -305,7 +338,7 @@ function renderIdentityDock() {
 
 function attachEvents() {
   document.addEventListener("keydown", (event) => {
-    if (!event.ctrlKey || !event.shiftKey || event.code !== "KeyL") {
+    if (!event.ctrlKey || !event.shiftKey || event.code !== LOGIN_SHORTCUT_CODE) {
       return;
     }
     event.preventDefault();

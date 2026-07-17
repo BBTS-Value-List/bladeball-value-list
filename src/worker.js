@@ -8,16 +8,18 @@ const HTML_SECURITY_HEADERS = {
     "default-src 'self'",
     "base-uri 'self'",
     "connect-src 'self'",
-    "font-src 'self' https://fonts.gstatic.com data:",
+    "font-src 'self' data:",
     "form-action 'self' https://discord.com",
     "frame-ancestors 'none'",
     "img-src 'self' data: blob: https://cdn.discordapp.com",
     "media-src 'self' data: blob:",
     "script-src 'self'",
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com"
+    "style-src 'self' 'unsafe-inline'"
   ].join("; "),
+  "cross-origin-opener-policy": "same-origin",
   "permissions-policy": "camera=(), geolocation=(), microphone=()",
   "referrer-policy": "strict-origin-when-cross-origin",
+  "strict-transport-security": "max-age=31536000",
   "x-content-type-options": "nosniff",
   "x-frame-options": "DENY"
 };
@@ -39,7 +41,10 @@ const MAX_EDIT_VALUE = 10_000_000;
 const MAX_TEXT_LENGTH = 2_000;
 const MAX_IMAGE_BYTES = 3 * 1024 * 1024;
 const MAX_MEDIA_BYTES = 8 * 1024 * 1024;
+const MAX_SFX_BYTES = 1 * 1024 * 1024;
+const MAX_VISUAL_PREVIEW_BYTES = 10 * 1024 * 1024;
 const DIRECT_MEDIA_READ_LIMIT = 512 * 1024;
+const D1_MEDIA_CHUNK_BYTES = 1 * 1024 * 1024;
 const CARD_ID_PREFIX = "#";
 const CARD_ID_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 const CARD_ID_LENGTH = 6;
@@ -49,6 +54,7 @@ const PUBLIC_TEAM_ROLES = new Set(["Contributor", "Editor", "Maintainer", "Admin
 const CATEGORIES = new Set(["LTM", "Ranked", "Top Spenders", "Other Swords", "Explosions"]);
 const DEMANDS = new Set(["Very High", "High", "Medium", "Low", "N/A"]);
 const TRENDS = new Set(["Rising", "Falling", "Stable", "Manipulated", "N/A"]);
+const MEDIA_VARIANTS = new Set(["card-image", "detail", "slash", "slash-audio"]);
 const MEDIA_MIME_MAP = new Map([
   ["image/webp", { ext: "webp", kind: "image" }],
   ["image/png", { ext: "png", kind: "image" }],
@@ -56,6 +62,8 @@ const MEDIA_MIME_MAP = new Map([
   ["image/gif", { ext: "gif", kind: "image" }],
   ["video/mp4", { ext: "mp4", kind: "video" }],
   ["audio/mpeg", { ext: "mp3", kind: "audio" }],
+  ["audio/x-mpeg", { ext: "mpeg", kind: "audio" }],
+  ["audio/mpeg3", { ext: "mp3", kind: "audio" }],
   ["audio/mp3", { ext: "mp3", kind: "audio" }],
   ["audio/ogg", { ext: "ogg", kind: "audio" }],
   ["audio/wav", { ext: "wav", kind: "audio" }],
@@ -67,7 +75,7 @@ const ROLE_PERMISSIONS = {
   Contributor: ["team:view:self"],
   Editor: ["team:view:self", "sword:update", "media:update"],
   Maintainer: ["team:view:self", "sword:update", "media:update", "sword:create", "sword:delete"],
-  Administrator: ["team:view:self", "sword:update", "media:update", "sword:create", "sword:delete", "audit:view", "data:export", "data:reset"],
+  Administrator: ["team:view:self", "sword:update", "media:update", "sword:create", "sword:delete", "audit:view", "data:export"],
   Developer: ["team:view:self", "sword:update", "media:update", "sword:create", "sword:delete", "audit:view", "data:export", "data:reset", "audit:revert", "team:manage", "session:revoke", "backup:manage"],
   Owner: ["team:view:self", "sword:update", "media:update", "sword:create", "sword:delete", "audit:view", "data:export", "data:reset", "audit:revert", "team:manage", "session:revoke", "backup:manage", "owner:all"]
 };
@@ -139,6 +147,10 @@ export default {
         return withSecurityHeaders(await requireCapability(request, env, "sword:create", ({ actor }) => handleCreateSword(request, env, actor)));
       }
 
+      if (url.pathname === "/api/media" && request.method === "POST") {
+        return withSecurityHeaders(await requireCapability(request, env, "media:update", () => handleUploadMedia(request, env)));
+      }
+
       if (url.pathname === "/api/swords") {
         return withSecurityHeaders(methodNotAllowed(["GET", "POST"]));
       }
@@ -207,11 +219,11 @@ export default {
       }
 
       if (url.pathname === "/llms.txt" || url.pathname === "/llm.txt") {
-        return withSecurityHeaders(text(buildLlmsText(request, env), "text/plain; charset=utf-8"));
+        return withSecurityHeaders(text(buildLlmsText(request, env), "text/markdown; charset=utf-8", "no-store"));
       }
 
       if (url.pathname === "/llms-full.txt") {
-        return withSecurityHeaders(text(buildLlmsFullText(request, env), "text/plain; charset=utf-8"));
+        return withSecurityHeaders(text(buildLlmsFullText(request, env), "text/markdown; charset=utf-8", "no-store"));
       }
 
       if (url.pathname === "/sitemap.xml") {
@@ -237,21 +249,28 @@ async function handleAssetRequest(request, env) {
   headers.set("x-content-type-options", HTML_SECURITY_HEADERS["x-content-type-options"]);
   headers.set("x-frame-options", HTML_SECURITY_HEADERS["x-frame-options"]);
   headers.set("permissions-policy", HTML_SECURITY_HEADERS["permissions-policy"]);
+  headers.set("cross-origin-opener-policy", HTML_SECURITY_HEADERS["cross-origin-opener-policy"]);
+  headers.set("strict-transport-security", HTML_SECURITY_HEADERS["strict-transport-security"]);
 
   const contentType = headers.get("content-type") || "";
   if (contentType.includes("text/html")) {
-    headers.set("content-security-policy", HTML_SECURITY_HEADERS["content-security-policy"]);
-    headers.set("cache-control", "public, max-age=300");
+    const nonce = createCspNonce();
+    headers.set("content-security-policy", buildContentSecurityPolicy(nonce));
+    headers.set("cache-control", "no-store");
     const html = await response.text();
-    return new Response(injectDynamicHeadMarkup(html, request, env), {
+    return new Response(await injectDynamicHeadMarkup(html, request, env, nonce), {
       status: response.status,
       statusText: response.statusText,
       headers
     });
   }
 
-  if (contentType.includes("text/css") || contentType.includes("javascript")) {
-    headers.set("cache-control", "public, max-age=3600");
+  if (contentType.includes("font")) {
+    headers.set("cache-control", "public, max-age=31536000, immutable");
+  } else if (contentType.includes("text/css") || contentType.includes("javascript")) {
+    const url = new URL(request.url);
+    const isFingerprint = /\.\d{8}(?:\.\d+)?\.(?:css|js)$/.test(url.pathname);
+    headers.set("cache-control", url.searchParams.has("v") || isFingerprint ? "public, max-age=31536000, immutable" : "public, max-age=3600");
   }
 
   return new Response(response.body, {
@@ -269,7 +288,10 @@ async function handleStaticPageRequest(request, env, assetPath) {
   });
   const response = await env.ASSETS.fetch(assetRequest);
   const headers = new Headers(response.headers);
-  headers.set("content-security-policy", HTML_SECURITY_HEADERS["content-security-policy"]);
+  const nonce = createCspNonce();
+  headers.set("content-security-policy", buildContentSecurityPolicy(nonce));
+  headers.set("cross-origin-opener-policy", HTML_SECURITY_HEADERS["cross-origin-opener-policy"]);
+  headers.set("strict-transport-security", HTML_SECURITY_HEADERS["strict-transport-security"]);
   headers.set("cache-control", "no-store");
   const html = await response.text();
   if (request.method === "HEAD") {
@@ -279,7 +301,7 @@ async function handleStaticPageRequest(request, env, assetPath) {
       headers
     });
   }
-  return new Response(injectDynamicHeadMarkup(html, request, env), {
+  return new Response(await injectDynamicHeadMarkup(html, request, env, nonce), {
     status: response.status,
     statusText: response.statusText,
     headers
@@ -449,10 +471,7 @@ async function handlePublicApiTeam(request, env) {
 
 async function handleCreateSword(request, env, actor) {
   const payload = normalizeSwordPayload(await request.json());
-  const image = payload.img !== undefined ? await persistMedia(env, payload.img, payload.n, "card-image") : { mediaKey: null };
-  const detailMedia = payload.detailMedia !== undefined ? await persistMedia(env, payload.detailMedia, payload.n, "detail") : { mediaKey: null };
-  const slashMedia = payload.slashMedia !== undefined ? await persistMedia(env, payload.slashMedia, payload.n, "slash") : { mediaKey: null };
-  const slashAudio = payload.slashAudio !== undefined ? await persistMedia(env, payload.slashAudio, payload.n, "slash-audio") : { mediaKey: null };
+  const { image, detailMedia, slashMedia, slashAudio } = await persistSwordMedia(env, payload, payload.n);
   const cardId = await generateUniqueCardId(env);
   const now = currentDateString();
 
@@ -498,10 +517,7 @@ async function handleUpdateSword(request, env, id, actor) {
   }
 
   const payload = normalizeSwordPayload(await request.json());
-  const image = payload.img !== undefined ? await persistMedia(env, payload.img, payload.n, "card-image") : { mediaKey: existing.image_key };
-  const detailMedia = payload.detailMedia !== undefined ? await persistMedia(env, payload.detailMedia, payload.n, "detail") : { mediaKey: existing.detail_image_key };
-  const slashMedia = payload.slashMedia !== undefined ? await persistMedia(env, payload.slashMedia, payload.n, "slash") : { mediaKey: existing.slash_media_key };
-  const slashAudio = payload.slashAudio !== undefined ? await persistMedia(env, payload.slashAudio, payload.n, "slash-audio") : { mediaKey: existing.slash_audio_key };
+  const { image, detailMedia, slashMedia, slashAudio } = await persistSwordMedia(env, payload, payload.n, existing);
   const beforeSnapshot = serializeSword(existing);
 
   await env.DB.prepare(`
@@ -538,6 +554,14 @@ async function handleUpdateSword(request, env, id, actor) {
   });
 
   return json({ sword: serializeSword(updated, mediaMap) });
+}
+
+async function handleUploadMedia(request, env) {
+  const body = await request.json();
+  const swordName = requireString(body.n, "Name");
+  const variant = requireEnum(body.variant, MEDIA_VARIANTS, "Media type");
+  const stored = await persistMedia(env, body.media, swordName, variant);
+  return json({ mediaKey: stored.mediaKey }, 201);
 }
 
 async function handleDeleteSword(request, env, id, actor) {
@@ -635,9 +659,9 @@ async function handleListTeam(request, env) {
   const includeAll = hasCapability(actor?.user?.role, "team:manage");
   const { placeholders, values } = getPublicTeamRoleFilter();
   const sql = includeAll
-    ? "SELECT id, discord_user_id, username, global_name, avatar_hash, role, status, created_at, updated_at, last_login_at FROM users ORDER BY role_sort DESC, updated_at DESC, id ASC"
+    ? "SELECT id, discord_user_id, username, global_name, avatar_hash, role, status, created_at, updated_at, last_login_at FROM users WHERE role != ? ORDER BY role_sort DESC, updated_at DESC, id ASC"
     : `SELECT id, discord_user_id, username, global_name, avatar_hash, role, status, created_at, updated_at, last_login_at FROM users WHERE status = 'active' AND role IN (${placeholders}) ORDER BY role_sort DESC, updated_at DESC, id ASC`;
-  const bindings = includeAll ? [] : values;
+  const bindings = includeAll ? ["Viewer"] : values;
   const { results } = await env.DB.prepare(sql).bind(...bindings).all();
   return json({
     team: (results || []).map((row) => includeAll ? serializeTeamUser(row) : serializePublicTeamUser(row)),
@@ -878,7 +902,7 @@ async function handleGetMedia(request, env, key) {
   }
 
   const row = await env.DB.prepare(`
-    SELECT content_type, length(image_data) AS media_size
+    SELECT content_type, COALESCE(media_size, length(image_data)) AS media_size
     FROM sword_images
     WHERE image_key = ?
   `).bind(key).first();
@@ -1346,7 +1370,7 @@ function buildMediaUrl(key) {
 
 function inferMediaKindFromKey(key) {
   const lowerKey = String(key || "").toLowerCase();
-  if (/\.(mp3|ogg|wav)$/i.test(lowerKey)) {
+  if (/\.(mpeg|mp3|ogg|wav)$/i.test(lowerKey)) {
     return "audio";
   }
   if (/\.mp4$/i.test(lowerKey)) {
@@ -1393,10 +1417,7 @@ async function applySwordSnapshotUpdate(env, id, payload) {
     throw new HttpError(404, "Sword not found.");
   }
   const normalized = normalizeSwordPayload(payload);
-  const image = normalized.img !== undefined ? await persistMedia(env, normalized.img, normalized.n, "card-image") : { mediaKey: current.image_key };
-  const detailMedia = normalized.detailMedia !== undefined ? await persistMedia(env, normalized.detailMedia, normalized.n, "detail") : { mediaKey: current.detail_image_key };
-  const slashMedia = normalized.slashMedia !== undefined ? await persistMedia(env, normalized.slashMedia, normalized.n, "slash") : { mediaKey: current.slash_media_key };
-  const slashAudio = normalized.slashAudio !== undefined ? await persistMedia(env, normalized.slashAudio, normalized.n, "slash-audio") : { mediaKey: current.slash_audio_key };
+  const { image, detailMedia, slashMedia, slashAudio } = await persistSwordMedia(env, normalized, normalized.n, current);
 
   await env.DB.prepare(`
     UPDATE swords
@@ -1422,10 +1443,7 @@ async function applySwordSnapshotUpdate(env, id, payload) {
 async function restoreSwordSnapshot(env, snapshot) {
   const existing = await getSwordById(env, Number(snapshot.id));
   if (!existing) {
-    const image = snapshot.img ? await persistMedia(env, snapshot.img, snapshot.n, "card-image") : { mediaKey: null };
-    const detailMedia = snapshot.detailMedia ? await persistMedia(env, snapshot.detailMedia, snapshot.n, "detail") : { mediaKey: null };
-    const slashMedia = snapshot.slashMedia ? await persistMedia(env, snapshot.slashMedia, snapshot.n, "slash") : { mediaKey: null };
-    const slashAudio = snapshot.slashAudio ? await persistMedia(env, snapshot.slashAudio, snapshot.n, "slash-audio") : { mediaKey: null };
+    const { image, detailMedia, slashMedia, slashAudio } = await persistSwordMedia(env, swordPayloadFromSnapshot(snapshot), snapshot.n);
     await env.DB.prepare(`
       INSERT INTO swords (id, card_id, n, c, v, d, t, ct, u, descr, image_key, detail_image_key, slash_media_key, slash_audio_key, edited)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
@@ -1451,6 +1469,22 @@ async function restoreSwordSnapshot(env, snapshot) {
   await applySwordSnapshotUpdate(env, Number(snapshot.id), swordPayloadFromSnapshot(snapshot));
 }
 
+async function persistSwordMedia(env, payload, swordName, existing = {}) {
+  const image = payload.img !== undefined
+    ? await persistMedia(env, payload.img, swordName, "card-image")
+    : { mediaKey: existing.image_key || null };
+  const detailMedia = payload.detailMedia !== undefined
+    ? await persistMedia(env, payload.detailMedia, swordName, "detail")
+    : { mediaKey: existing.detail_image_key || null };
+  const slashMedia = payload.slashMedia !== undefined
+    ? await persistMedia(env, payload.slashMedia, swordName, "slash")
+    : { mediaKey: existing.slash_media_key || null };
+  const slashAudio = payload.slashAudio !== undefined
+    ? await persistMedia(env, payload.slashAudio, swordName, "slash-audio")
+    : { mediaKey: existing.slash_audio_key || null };
+  return { image, detailMedia, slashMedia, slashAudio };
+}
+
 async function persistMedia(env, mediaInput, swordName, variant) {
   if (mediaInput === null) {
     return { mediaKey: null };
@@ -1458,6 +1492,7 @@ async function persistMedia(env, mediaInput, swordName, variant) {
 
   if (typeof mediaInput === "object" && !Array.isArray(mediaInput)) {
     if (typeof mediaInput.key === "string" && mediaInput.key) {
+      await assertExistingMediaKind(env, mediaInput.key, variant);
       return { mediaKey: mediaInput.key };
     }
     return persistVariantMedia(env, mediaInput, swordName, variant);
@@ -1469,13 +1504,15 @@ async function persistMedia(env, mediaInput, swordName, variant) {
 
   const existingKey = parseMediaKeyFromInput(mediaInput);
   if (existingKey) {
+    await assertExistingMediaKind(env, existingKey, variant);
     return { mediaKey: existingKey };
   }
 
-  const parsed = parseDataUrl(mediaInput);
-  const maxBytes = parsed.kind === "audio" || parsed.kind === "video" ? MAX_MEDIA_BYTES : MAX_IMAGE_BYTES;
+  const parsed = parseDataUrl(mediaInput, getMediaFieldLabel(variant));
+  assertMediaKindForField(variant, parsed.kind, parsed.contentType);
+  const maxBytes = getMaxMediaBytes(variant, parsed.kind);
   if (parsed.bytes.byteLength > maxBytes) {
-    throw new HttpError(413, "Media file is too large.");
+    throwMediaSizeError(variant, maxBytes);
   }
 
   const baseKey = buildMediaSetKey(swordName, variant);
@@ -1521,12 +1558,14 @@ async function persistVariantMedia(env, mediaInput, swordName, variant) {
   const parsedMedium = parseDataUrl(normalized.medium);
   const parsedOriginal = parseDataUrl(normalized.original);
   const parsedList = [parsedLow, parsedMedium, parsedOriginal];
+  assertMediaKindForField(variant, "image", parsedOriginal.contentType);
   for (const parsed of parsedList) {
     if (parsed.kind !== "image") {
       throw new HttpError(415, "Only image media can include generated quality variants.");
     }
-    if (parsed.bytes.byteLength > MAX_IMAGE_BYTES) {
-      throw new HttpError(413, "Media file is too large.");
+    const maxBytes = getMaxMediaBytes(variant, parsed.kind);
+    if (parsed.bytes.byteLength > maxBytes) {
+      throwMediaSizeError(variant, maxBytes);
     }
   }
 
@@ -1577,6 +1616,42 @@ function parseMediaKeyFromInput(mediaInput) {
   return null;
 }
 
+async function assertExistingMediaKind(env, mediaKey, variant) {
+  const mediaMap = await loadMediaDescriptorMap(env, [mediaKey]);
+  const descriptor = mediaMap.get(mediaKey);
+  if (!descriptor) {
+    throw new HttpError(404, "Media was not found.");
+  }
+  assertMediaKindForField(variant, descriptor.kind, "");
+}
+
+function assertMediaKindForField(variant, kind, contentType) {
+  const isAudioField = variant === "slash-audio";
+  const isSupported = isAudioField ? kind === "audio" : kind === "image" || kind === "video";
+  if (isSupported) {
+    return;
+  }
+  const label = getMediaFieldLabel(variant);
+  const format = getMediaFormatLabel(contentType || kind);
+  const hint = isAudioField ? " Use MPEG, MP3, OGG, or WAV." : " Use an image or MP4 video.";
+  throw new HttpError(415, `${label} does not support ${format} format.${hint}`);
+}
+
+function getMaxMediaBytes(variant, kind) {
+  if (variant === "slash-audio") {
+    return MAX_SFX_BYTES;
+  }
+  if (variant === "detail" || variant === "slash") {
+    return MAX_VISUAL_PREVIEW_BYTES;
+  }
+  return kind === "audio" || kind === "video" ? MAX_MEDIA_BYTES : MAX_IMAGE_BYTES;
+}
+
+function throwMediaSizeError(variant, maxBytes) {
+  const megabytes = maxBytes / (1024 * 1024);
+  throw new HttpError(413, `${getMediaFieldLabel(variant)} must be ${megabytes} MB or smaller.`);
+}
+
 function buildMediaSetKey(swordName, variant) {
   const slug = swordName
     .toLowerCase()
@@ -1595,19 +1670,34 @@ function buildVariantKeys(baseKey, extension) {
 }
 
 async function upsertMediaRecord(env, mediaKey, contentType, bytes) {
-  await env.DB.prepare(`
-    INSERT INTO sword_images (image_key, content_type, image_data, updated_at)
-    VALUES (?, ?, ?, ?)
+  const usesChunks = bytes.byteLength > D1_MEDIA_CHUNK_BYTES;
+  const statements = [env.DB.prepare(`
+    INSERT INTO sword_images (image_key, content_type, image_data, media_size, updated_at)
+    VALUES (?, ?, ?, ?, ?)
     ON CONFLICT(image_key) DO UPDATE SET
       content_type = excluded.content_type,
       image_data = excluded.image_data,
+      media_size = excluded.media_size,
       updated_at = excluded.updated_at
   `).bind(
     mediaKey,
     contentType,
-    bytes,
+    usesChunks ? new Uint8Array() : bytes,
+    bytes.byteLength,
     currentIsoString()
-  ).run();
+  ), env.DB.prepare("DELETE FROM media_chunks WHERE image_key = ?").bind(mediaKey)];
+
+  if (usesChunks) {
+    for (let offset = 0, chunkIndex = 0; offset < bytes.byteLength; offset += D1_MEDIA_CHUNK_BYTES, chunkIndex += 1) {
+      const chunk = bytes.slice(offset, offset + D1_MEDIA_CHUNK_BYTES);
+      statements.push(env.DB.prepare(`
+        INSERT INTO media_chunks (image_key, chunk_index, chunk_data)
+        VALUES (?, ?, ?)
+      `).bind(mediaKey, chunkIndex, chunk));
+    }
+  }
+
+  await env.DB.batch(statements);
 }
 
 async function upsertMediaVariantSet(env, record) {
@@ -1711,7 +1801,21 @@ function inferMediaKindFromContentType(contentType) {
   return "";
 }
 
-function parseDataUrl(input) {
+function getMediaFieldLabel(variant) {
+  const labels = {
+    "card-image": "Card Media",
+    detail: "VFX Preview",
+    slash: "Slash Preview",
+    "slash-audio": "Slash Audio"
+  };
+  return labels[variant] || "Media";
+}
+
+function getMediaFormatLabel(contentType) {
+  return MEDIA_MIME_MAP.get(contentType)?.ext?.toUpperCase() || contentType || "this";
+}
+
+function parseDataUrl(input, fieldLabel = "Media") {
   const match = /^data:([^;]+);base64,(.+)$/i.exec(input);
   if (!match) {
     throw new HttpError(400, "Media must be a base64 data URL.");
@@ -1720,7 +1824,9 @@ function parseDataUrl(input) {
   const contentType = match[1].toLowerCase();
   const mediaInfo = MEDIA_MIME_MAP.get(contentType);
   if (!mediaInfo) {
-    throw new HttpError(415, "Unsupported media type.");
+    const format = getMediaFormatLabel(contentType);
+    const hint = fieldLabel === "Slash Audio" ? " Use MPEG, MP3, OGG, or WAV." : "";
+    throw new HttpError(415, `${fieldLabel} does not support ${format} format.${hint}`);
   }
 
   const binary = atob(match[2]);
@@ -1783,6 +1889,26 @@ async function readMediaBody(value) {
 async function readMediaBodyFromChunks(env, key, mediaSize) {
   if (!Number.isFinite(mediaSize) || mediaSize <= 0) {
     return null;
+  }
+
+  const chunked = new Uint8Array(mediaSize);
+  let chunkOffset = 0;
+  for (let chunkIndex = 0; chunkOffset < mediaSize; chunkIndex += 1) {
+    const row = await env.DB.prepare(`
+      SELECT chunk_data
+      FROM media_chunks
+      WHERE image_key = ? AND chunk_index = ?
+    `).bind(key, chunkIndex).first();
+    const chunk = await readMediaBody(row?.chunk_data);
+    const expectedLength = Math.min(D1_MEDIA_CHUNK_BYTES, mediaSize - chunkOffset);
+    if (!chunk || chunk.byteLength !== expectedLength) {
+      break;
+    }
+    chunked.set(chunk, chunkOffset);
+    chunkOffset += chunk.byteLength;
+  }
+  if (chunkOffset === mediaSize) {
+    return chunked;
   }
 
   const chunkSize = 262144;
@@ -1960,7 +2086,14 @@ async function ensureCoreSchema(env) {
           image_key TEXT PRIMARY KEY,
           content_type TEXT NOT NULL,
           image_data BLOB NOT NULL,
+          media_size INTEGER,
           updated_at TEXT NOT NULL
+        )`,
+        `CREATE TABLE IF NOT EXISTS media_chunks (
+          image_key TEXT NOT NULL,
+          chunk_index INTEGER NOT NULL,
+          chunk_data BLOB NOT NULL,
+          PRIMARY KEY (image_key, chunk_index)
         )`,
         `CREATE TABLE IF NOT EXISTS media_variant_sets (
           base_key TEXT PRIMARY KEY,
@@ -2033,6 +2166,7 @@ async function ensureCoreSchema(env) {
       await ensureColumn(env, "swords", "detail_image_key", "TEXT");
       await ensureColumn(env, "swords", "slash_media_key", "TEXT");
       await ensureColumn(env, "swords", "slash_audio_key", "TEXT");
+      await ensureColumn(env, "sword_images", "media_size", "INTEGER");
       await ensureColumn(env, "sword_baseline", "card_id", "TEXT");
       await ensureColumn(env, "sword_baseline", "detail_image_key", "TEXT");
       await ensureColumn(env, "sword_baseline", "slash_media_key", "TEXT");
@@ -2276,12 +2410,12 @@ function methodNotAllowed(methods) {
   return json({ error: "Method not allowed." }, 405, { allow: methods.join(", ") });
 }
 
-function text(body, contentType) {
+function text(body, contentType, cacheControl = "public, max-age=3600") {
   return new Response(body, {
     status: 200,
     headers: {
       "content-type": contentType,
-      "cache-control": "public, max-age=3600"
+      "cache-control": cacheControl
     }
   });
 }
@@ -2307,11 +2441,13 @@ function buildLlmsText(request, env) {
     "Signed-in users can be assigned Viewer, Contributor, Editor, Maintainer, Administrator, Developer, or Owner roles.",
     "Cards expose public value data and richer media details when selected.",
     "",
-    `Canonical: ${siteUrl}/`,
-    `Team: ${siteUrl}/team`,
-    `Bot API: ${siteUrl}/api/v1/swords`,
-    `Sitemap: ${siteUrl}/sitemap.xml`,
-    `More: ${siteUrl}/llms-full.txt`
+    "## Important links",
+    "",
+    `- [Website](${siteUrl}/)`,
+    `- [Team](${siteUrl}/team)`,
+    `- [Public API](${siteUrl}/api/v1/swords)`,
+    `- [Sitemap](${siteUrl}/sitemap.xml)`,
+    `- [Full site guide](${siteUrl}/llms-full.txt)`
   ].join("\n");
 }
 
@@ -2333,12 +2469,12 @@ function buildLlmsFullText(request, env) {
     "- Detail modal with richer media such as item animation, slash media, and slash audio when available.",
     "",
     "## Machine-readable endpoints",
-    `- Bot API health: ${siteUrl}/api/v1/health`,
-    `- Bot API sword list: ${siteUrl}/api/v1/swords`,
-    `- Bot API team: ${siteUrl}/api/v1/team`,
-    `- Robots: ${siteUrl}/robots.txt`,
-    `- Sitemap: ${siteUrl}/sitemap.xml`,
-    `- LLM summary: ${siteUrl}/llms.txt`,
+    `- [Bot API health](${siteUrl}/api/v1/health)`,
+    `- [Bot API sword list](${siteUrl}/api/v1/swords)`,
+    `- [Bot API team](${siteUrl}/api/v1/team)`,
+    `- [Robots](${siteUrl}/robots.txt)`,
+    `- [Sitemap](${siteUrl}/sitemap.xml)`,
+    `- [LLM summary](${siteUrl}/llms.txt)`,
     "",
     "## Notes",
     "- Public data is readable without authentication.",
@@ -2347,7 +2483,7 @@ function buildLlmsFullText(request, env) {
   ].join("\n");
 }
 
-function injectDynamicHeadMarkup(html, request, env) {
+async function injectDynamicHeadMarkup(html, request, env, nonce) {
   const siteUrl = (env.PUBLIC_SITE_URL || new URL(request.url).origin).replace(/\/+$/g, "");
   const pageUrl = `${siteUrl}${getCanonicalPagePath(request)}`;
   const imageUrl = `${siteUrl}/og-image.png`;
@@ -2359,10 +2495,46 @@ function injectDynamicHeadMarkup(html, request, env) {
     `<meta property="og:image:type" content="image/png">`,
     `<meta property="og:image:alt" content="BBTSL Blade Ball Value List preview image">`,
     `<meta name="twitter:image" content="${imageUrl}">`,
-    `<meta name="twitter:image:alt" content="BBTSL Blade Ball Value List preview image">`
+    `<meta name="twitter:image:alt" content="BBTSL Blade Ball Value List preview image">`,
+    await buildLcpPreloadMarkup(request, env)
   ].join("");
 
-  return html.replace('<meta name="bbtsl-dynamic-meta" content="">', markup);
+  return addScriptNonces(html.replace('<meta name="bbtsl-dynamic-meta" content="">', markup), nonce);
+}
+
+function createCspNonce() {
+  return crypto.randomUUID().replace(/-/g, "");
+}
+
+function buildContentSecurityPolicy(nonce) {
+  return HTML_SECURITY_HEADERS["content-security-policy"].replace("script-src 'self'", `script-src 'self' 'nonce-${nonce}'`);
+}
+
+function addScriptNonces(html, nonce) {
+  return html.replace(/<script\b(?![^>]*\bnonce=)([^>]*)>/gi, `<script nonce="${nonce}"$1>`);
+}
+
+async function buildLcpPreloadMarkup(request, env) {
+  if (new URL(request.url).pathname !== "/") {
+    return "";
+  }
+  try {
+    const row = await env.DB.prepare(`
+      SELECT COALESCE(media_variant_sets.low_key, swords.image_key) AS media_key
+      FROM swords
+      LEFT JOIN media_variant_sets ON media_variant_sets.base_key = swords.image_key
+      WHERE swords.image_key IS NOT NULL AND swords.image_key != ''
+      ORDER BY swords.v DESC, swords.id ASC
+      LIMIT 1
+    `).first();
+    if (!row?.media_key) {
+      return "";
+    }
+    return `<link rel="preload" as="image" href="${buildMediaUrl(row.media_key)}" fetchpriority="high">`;
+  } catch (error) {
+    console.error("Could not build the homepage image preload.", error);
+    return "";
+  }
 }
 
 function getCanonicalPagePath(request) {
@@ -2409,8 +2581,8 @@ function withSecurityHeaders(response) {
   headers.set("x-content-type-options", HTML_SECURITY_HEADERS["x-content-type-options"]);
   headers.set("x-frame-options", HTML_SECURITY_HEADERS["x-frame-options"]);
   headers.set("permissions-policy", HTML_SECURITY_HEADERS["permissions-policy"]);
-  if (contentType.includes("text/html")) {
-    headers.set("content-security-policy", HTML_SECURITY_HEADERS["content-security-policy"]);
+  if (contentType.includes("text/html") && !headers.has("content-security-policy")) {
+    headers.set("content-security-policy", buildContentSecurityPolicy(createCspNonce()));
   }
   return new Response(response.body, {
     status: response.status,

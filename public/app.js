@@ -19,7 +19,28 @@ const CATEGORY_ORDER = ["All", "LTM", "Ranked", "Top Spenders", "Other Swords", 
 const API_BASE = "/api";
 const HOVER_DELAY_MS = 240;
 const GRID_SKELETON_COUNT = 16;
-const CARD_MEDIA_ROOT_MARGIN = "320px";
+const GRID_INITIAL_CARD_COUNT = 12;
+const GRID_CARD_BATCH_SIZE = 12;
+const GRID_BATCH_ROOT_MARGIN = "768px 0px";
+const CARD_MEDIA_ROOT_MARGIN = "0px";
+const HIGH_QUALITY_IDLE_TIMEOUT_MS = 1_000;
+const CARD_ORIGINAL_UPGRADE_DELAY_MS = 750;
+const AUDIO_UPLOAD_TYPES = new Set(["audio/mpeg", "audio/x-mpeg", "audio/mpeg3", "audio/mp3", "audio/ogg", "audio/wav", "audio/x-wav"]);
+const AUDIO_UPLOAD_EXTENSIONS = new Map([
+  [".mpeg", "audio/mpeg"],
+  [".mp3", "audio/mpeg"],
+  [".ogg", "audio/ogg"],
+  [".wav", "audio/wav"]
+]);
+const VISUAL_MEDIA_UPLOAD_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif", "video/mp4"]);
+const MAX_SFX_UPLOAD_BYTES = 1 * 1024 * 1024;
+const MAX_VISUAL_PREVIEW_UPLOAD_BYTES = 10 * 1024 * 1024;
+const MEDIA_UPLOAD_VARIANTS = {
+  img: "card-image",
+  detailMedia: "detail",
+  slashMedia: "slash",
+  slashAudio: "slash-audio"
+};
 const LOGOUT_ICON = `
   <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
     <path d="M14 4H7.75A1.75 1.75 0 0 0 6 5.75v12.5C6 19.216 6.784 20 7.75 20H14" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
@@ -44,6 +65,7 @@ const dom = {
   search: document.getElementById("search"),
   sortSelect: document.getElementById("sortSelect"),
   grid: document.getElementById("grid"),
+  gridSentinel: document.getElementById("gridSentinel"),
   empty: document.getElementById("empty"),
   lastUpdated: document.getElementById("lastUpdated"),
   roleToolbar: document.getElementById("roleToolbar"),
@@ -58,8 +80,13 @@ const dom = {
   shortcutLoginCloseBtn: document.getElementById("shortcutLoginCloseBtn"),
   shortcutLoginCancelBtn: document.getElementById("shortcutLoginCancelBtn"),
   shortcutLoginBtn: document.getElementById("shortcutLoginBtn"),
+  editorSystemOverlay: document.getElementById("editorSystemOverlay"),
+  editorSystemCloseBtn: document.getElementById("editorSystemCloseBtn"),
+  editorSystemV1Btn: document.getElementById("editorSystemV1Btn"),
+  editorSystemV2Btn: document.getElementById("editorSystemV2Btn"),
   detailModalOverlay: document.getElementById("detailModalOverlay"),
   detailModal: document.querySelector("#detailModalOverlay .modal-split"),
+  uploadingIndicator: document.getElementById("uploadingIndicator"),
   detailCloseBtn: document.getElementById("detailCloseBtn"),
   editPanel: document.getElementById("editPanel"),
   editForm: document.getElementById("editForm"),
@@ -135,6 +162,8 @@ const state = {
   maxValue: 0,
   activeSwordId: null,
   editingSwordId: null,
+  pendingEditSwordId: null,
+  editorSystem: "v1",
   isAddingSword: false,
   activeModal: null,
   pendingMedia: {
@@ -148,11 +177,13 @@ const state = {
   hoverTimers: new Map(),
   confirmState: null,
   selectedCardId: null,
-  openingCardId: null
+  openingCardId: null,
+  renderedSwordCount: 0
 };
 
 const mediaRuntime = {
   cardObserver: null,
+  gridObserver: null,
   visibleCardTasks: new Set(),
   modalLoadToken: 0,
   highQualityCache: new Set()
@@ -191,13 +222,7 @@ async function initialize() {
   renderGrid();
   attachEvents();
   handleLoginFlags();
-  await Promise.all([syncAuthStatus(), refreshSwords()]);
-}
-
-async function syncAuthStatus() {
-  const status = await api("/auth/status");
-  state.auth = status;
-  renderShell();
+  await refreshSwords();
 }
 
 async function refreshSwords() {
@@ -388,6 +413,7 @@ function renderGrid() {
   renderChips();
   cleanupManagedMedia(dom.grid);
   disconnectCardObserver();
+  disconnectGridObserver();
   dom.grid.setAttribute("aria-busy", state.isGridLoading ? "true" : "false");
   if (state.isGridLoading) {
     dom.empty.classList.remove("show");
@@ -395,6 +421,7 @@ function renderGrid() {
     return;
   }
   const swords = getFilteredSwords();
+  state.renderedSwordCount = Math.min(GRID_INITIAL_CARD_COUNT, swords.length);
   if (!swords.length) {
     dom.grid.innerHTML = "";
     dom.empty.classList.add("show");
@@ -403,9 +430,45 @@ function renderGrid() {
   }
 
   dom.empty.classList.remove("show");
-  dom.grid.innerHTML = swords.map((sword, index) => buildCardMarkup(sword, index)).join("");
+  dom.grid.innerHTML = swords.slice(0, state.renderedSwordCount).map((sword, index) => buildCardMarkup(sword, index)).join("");
   updateSelectedCardState();
   hydrateGridMedia();
+  observeGridContinuation();
+}
+
+function appendGridCards() {
+  const swords = getFilteredSwords();
+  const nextCount = Math.min(state.renderedSwordCount + GRID_CARD_BATCH_SIZE, swords.length);
+  if (nextCount === state.renderedSwordCount) {
+    return;
+  }
+  const start = state.renderedSwordCount;
+  dom.grid.insertAdjacentHTML("beforeend", swords.slice(start, nextCount).map((sword, index) => buildCardMarkup(sword, start + index)).join(""));
+  state.renderedSwordCount = nextCount;
+  hydrateGridMedia();
+}
+
+function disconnectGridObserver() {
+  mediaRuntime.gridObserver?.disconnect();
+  mediaRuntime.gridObserver = null;
+}
+
+function observeGridContinuation() {
+  if (!dom.gridSentinel || state.renderedSwordCount >= getFilteredSwords().length) {
+    return;
+  }
+  mediaRuntime.gridObserver = new IntersectionObserver((entries) => {
+    if (!entries.some((entry) => entry.isIntersecting)) {
+      return;
+    }
+    requestAnimationFrame(() => {
+      appendGridCards();
+      if (state.renderedSwordCount >= getFilteredSwords().length) {
+        disconnectGridObserver();
+      }
+    });
+  }, { rootMargin: GRID_BATCH_ROOT_MARGIN });
+  mediaRuntime.gridObserver.observe(dom.gridSentinel);
 }
 
 function buildCardMarkup(sword, index = 0) {
@@ -414,7 +477,7 @@ function buildCardMarkup(sword, index = 0) {
   const trendIcon = TREND_ICONS[sword.t] || TREND_ICONS["N/A"];
   const canEdit = canEditSword();
   return `
-    <article class="card" data-card="${sword.id}" style="--tcolor:${getValueAccent(sword.v)}; --ccolor:${categoryColor}" aria-label="${escapeHtmlAttr(sword.n)} value card" tabindex="0">
+    <article class="card" data-card="${sword.id}" style="--tcolor:${getValueAccent(sword.v)}; --ccolor:${categoryColor}" aria-label="${escapeHtmlAttr(sword.n)} value card. Open for more information." tabindex="0">
       <div class="card-flip">
         <div class="card-face card-face-front${canEdit ? " card-face-front-has-actions" : ""}">
           ${buildCardMediaMarkup(sword.img, sword.n, index)}
@@ -439,13 +502,7 @@ function buildCardMarkup(sword, index = 0) {
           </div>
         </div>
         <div class="card-face card-face-back card-hover-overlay" aria-hidden="true">
-          <div class="card-hover-backdrop">
-            <div class="card-hover-boxes" aria-hidden="true">
-              <div class="card-hover-box"></div>
-              <div class="card-hover-box"></div>
-            </div>
-            <div class="card-hover-icon">?</div>
-          </div>
+          <div class="card-hover-backdrop"><div class="card-hover-icon">?</div><div class="card-hover-copy">Click for more info</div></div>
         </div>
       </div>
       ${canEdit ? `<div class="card-floating-actions"><button class="edit-btn" type="button" data-edit="${sword.id}" title="Edit ${escapeHtmlAttr(sword.n)}"><span class="edit-btn-label">Edit Card</span><span class="edit-btn-icon">${EDIT_ICON}</span></button></div>` : ""}
@@ -469,8 +526,9 @@ function buildCardMediaMarkup(media, name, index = 0, options = {}) {
     return '<div class="card-thumb"><img src="/images/unavailable.webp" alt="Unavailable" width="512" height="512" decoding="async" loading="lazy" fetchpriority="low"></div>';
   }
   const lowUrl = getMediaUrl(media, "low");
-  const eagerClass = index < 4 ? " eager-card-media" : "";
-  const fetchPriority = index < 4 ? "high" : "low";
+  const eagerClass = index === 0 ? " eager-card-media" : "";
+  const fetchPriority = index === 0 ? "high" : "low";
+  const loading = index === 0 ? "eager" : "lazy";
   const initialSrcAttribute = includeInitialSrc ? `src="${escapeHtmlAttr(lowUrl)}"` : "";
   return `
     <div class="card-thumb${eagerClass}">
@@ -479,7 +537,7 @@ function buildCardMediaMarkup(media, name, index = 0, options = {}) {
         width="512"
         height="512"
         decoding="async"
-        loading="lazy"
+        loading="${loading}"
         fetchpriority="${fetchPriority}"
         ${initialSrcAttribute}
         data-managed-image="card"
@@ -530,7 +588,7 @@ function normalizeMediaField(media) {
 
 function inferMediaKind(value) {
   const normalized = String(value || "").toLowerCase();
-  if (normalized.startsWith("data:audio/") || /\.(mp3|ogg|wav)$/i.test(normalized)) {
+  if (normalized.startsWith("data:audio/") || /\.(mpeg|mp3|ogg|wav)$/i.test(normalized)) {
     return "audio";
   }
   if (normalized.startsWith("data:video/") || /\.mp4$/i.test(normalized)) {
@@ -598,29 +656,40 @@ function disconnectCardObserver() {
   mediaRuntime.cardObserver = null;
 }
 
-function hydrateGridMedia() {
-  const managedImages = [...dom.grid.querySelectorAll("[data-managed-image='card']")];
+function hydrateGridMedia(container = dom.grid) {
+  const managedImages = [...container.querySelectorAll("[data-managed-image='card']")];
   if (!managedImages.length) {
-    hydrateManagedContainer(dom.grid);
+    hydrateManagedContainer(container);
     return;
   }
 
-  mediaRuntime.cardObserver = new IntersectionObserver((entries) => {
-    for (const entry of entries) {
-      if (!entry.isIntersecting) {
-        continue;
+  if (!mediaRuntime.cardObserver) {
+    mediaRuntime.cardObserver = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) {
+          continue;
+        }
+        const image = entry.target;
+        if (image.dataset.mediaUpgradeActive === "1") {
+          continue;
+        }
+        image.dataset.mediaUpgradeActive = "1";
+        const task = loadCardImageProgressively(image);
+        trackVisibleCardTask(task);
+        task.finally(() => {
+          delete image.dataset.mediaUpgradeActive;
+          if (!image.isConnected || image.dataset.loadedQuality === "original" || image.dataset.loadedQuality === "failed") {
+            mediaRuntime.cardObserver?.unobserve(image);
+          }
+        });
       }
-      const image = entry.target;
-      mediaRuntime.cardObserver?.unobserve(image);
-      const task = loadCardImageProgressively(image);
-      trackVisibleCardTask(task);
-    }
-  }, { rootMargin: CARD_MEDIA_ROOT_MARGIN });
+    }, { rootMargin: CARD_MEDIA_ROOT_MARGIN });
+  }
 
   managedImages.forEach((image) => {
     mediaRuntime.cardObserver.observe(image);
   });
-  hydrateManagedContainer(dom.grid);
+  hydrateManagedContainer(container);
 }
 
 function hydrateManagedContainer(container) {
@@ -650,16 +719,43 @@ async function waitForVisibleCardMedia() {
   await Promise.allSettled(tasks);
 }
 
+function waitForBrowserIdle() {
+  return new Promise((resolve) => {
+    if ("requestIdleCallback" in window) {
+      window.requestIdleCallback(resolve, { timeout: HIGH_QUALITY_IDLE_TIMEOUT_MS });
+      return;
+    }
+    window.setTimeout(resolve, 80);
+  });
+}
+
+function isCardImageVisible(image) {
+  const bounds = image.getBoundingClientRect();
+  return bounds.bottom > 0 && bounds.top < window.innerHeight;
+}
+
 async function loadCardImageProgressively(image) {
   try {
     if (applyCachedHighQualityImage(image)) {
-      return;
+      return image.dataset.loadedQuality;
     }
     await loadManagedImage(image, "low");
+    await waitForBrowserIdle();
+    if (!image.isConnected || !isCardImageVisible(image)) {
+      return image.dataset.loadedQuality;
+    }
     await loadManagedImage(image, "medium");
+    await new Promise((resolve) => window.setTimeout(resolve, CARD_ORIGINAL_UPGRADE_DELAY_MS));
+    await waitForBrowserIdle();
+    if (!image.isConnected || !isCardImageVisible(image)) {
+      return image.dataset.loadedQuality;
+    }
     await loadManagedImage(image, "original");
+    return image.dataset.loadedQuality;
   } catch {
     image.src = "/images/unavailable.webp";
+    image.dataset.loadedQuality = "failed";
+    return "failed";
   }
 }
 
@@ -869,11 +965,22 @@ function lockSelectedCardOpen(card, swordId) {
   card.getBoundingClientRect();
 }
 
-function openEditModal(swordId) {
+function openEditorChooser(swordId) {
   const sword = findSword(swordId);
   if (!sword || !canEditSword()) {
     return;
   }
+  state.pendingEditSwordId = swordId;
+  openModal(dom.editorSystemOverlay);
+  dom.editorSystemV1Btn?.focus();
+}
+
+function openEditModal(swordId, editorSystem = "v1") {
+  const sword = findSword(swordId);
+  if (!sword || !canEditSword()) {
+    return;
+  }
+  state.editorSystem = editorSystem;
   state.activeSwordId = swordId;
   state.editingSwordId = swordId;
   state.selectedCardId = swordId;
@@ -890,6 +997,7 @@ function openEditModal(swordId) {
 }
 
 function openAddModal() {
+  state.editorSystem = "v1";
   state.activeSwordId = null;
   state.editingSwordId = null;
   state.selectedCardId = null;
@@ -1062,9 +1170,9 @@ function fillEditForm(sword) {
   dom.fields.slashMedia.value = "";
   dom.fields.slashAudio.value = "";
   setPreview(dom.fields.imagePreview, sword.img, "No media");
-  setPreview(dom.fields.detailPreview, sword.detailMedia, "No media");
-  setPreview(dom.fields.slashPreview, sword.slashMedia, "No media");
-  setPreview(dom.fields.audioPreview, sword.slashAudio, "No audio");
+  setPreview(dom.fields.detailPreview, sword.detailMedia, "No VFX preview");
+  setPreview(dom.fields.slashPreview, sword.slashMedia, "No slash preview");
+  setPreview(dom.fields.audioPreview, sword.slashAudio, "No SFX preview", true);
   dom.fields.imageRemove.hidden = !sword.img;
   dom.fields.detailRemove.hidden = !sword.detailMedia;
   dom.fields.slashRemove.hidden = !sword.slashMedia;
@@ -1085,9 +1193,9 @@ function clearEditForm() {
   dom.fields.slashMedia.value = "";
   dom.fields.slashAudio.value = "";
   setPreview(dom.fields.imagePreview, null, "No media");
-  setPreview(dom.fields.detailPreview, null, "No media");
-  setPreview(dom.fields.slashPreview, null, "No media");
-  setPreview(dom.fields.audioPreview, null, "No audio");
+  setPreview(dom.fields.detailPreview, null, "No VFX preview");
+  setPreview(dom.fields.slashPreview, null, "No slash preview");
+  setPreview(dom.fields.audioPreview, null, "No SFX preview");
   dom.fields.imageRemove.hidden = true;
   dom.fields.detailRemove.hidden = true;
   dom.fields.slashRemove.hidden = true;
@@ -1095,13 +1203,15 @@ function clearEditForm() {
   syncDetailPreviewFromEditor();
 }
 
-function setPreview(target, source, emptyText) {
+function setPreview(target, source, emptyText, forceAudio = false) {
+  target.classList.remove("is-audio-preview");
   if (!source) {
     target.textContent = emptyText;
     return;
   }
   const media = normalizeMediaField(source);
-  if (media.kind === "audio") {
+  if (forceAudio || target === dom.fields.audioPreview || media.kind === "audio") {
+    target.classList.add("is-audio-preview");
     target.innerHTML = `<audio controls preload="none" src="${escapeHtmlAttr(getMediaUrl(media, "original"))}"></audio>`;
     return;
   }
@@ -1115,10 +1225,10 @@ function setPreview(target, source, emptyText) {
 async function handleEditSubmit(event) {
   event.preventDefault();
   clearEditFormError();
-  setEditFormBusy(true);
+  setEditFormBusy(true, hasPendingMediaUpload());
 
   try {
-    const payload = {
+    const payload = await uploadPendingMedia({
       n: dom.fields.name.value.trim(),
       c: dom.fields.category.value,
       v: Number(dom.fields.value.value),
@@ -1130,7 +1240,7 @@ async function handleEditSubmit(event) {
       detailMedia: state.pendingMedia.detailMedia,
       slashMedia: state.pendingMedia.slashMedia,
       slashAudio: state.pendingMedia.slashAudio
-    };
+    });
 
     if (state.isAddingSword) {
       const { sword } = await api("/swords", { method: "POST", body: JSON.stringify(payload) });
@@ -1168,9 +1278,38 @@ async function handleDeleteSword() {
   }
 }
 
-function setEditFormBusy(isBusy) {
+function setEditFormBusy(isBusy, isUploading = false) {
   dom.editSaveBtn.disabled = isBusy;
   dom.deleteBtn.disabled = isBusy;
+  dom.cancelBtn.disabled = isBusy;
+  dom.detailCloseBtn.disabled = isBusy;
+  dom.editForm.classList.toggle("is-busy", isBusy);
+  dom.editForm.setAttribute("aria-busy", String(isBusy));
+  setUploadIndicator(isBusy && isUploading);
+}
+
+function setUploadIndicator(isBusy) {
+  dom.uploadingIndicator.hidden = !isBusy;
+}
+
+function hasPendingMediaUpload() {
+  return Object.values(state.pendingMedia).some((media) => media !== undefined && media !== null);
+}
+
+async function uploadPendingMedia(payload) {
+  const uploaded = { ...payload };
+  for (const [field, variant] of Object.entries(MEDIA_UPLOAD_VARIANTS)) {
+    const media = uploaded[field];
+    if (media === undefined || media === null || (typeof media === "object" && typeof media.key === "string")) {
+      continue;
+    }
+    const { mediaKey } = await api("/media", {
+      method: "POST",
+      body: JSON.stringify({ n: uploaded.n, variant, media })
+    });
+    uploaded[field] = { key: mediaKey };
+  }
+  return uploaded;
 }
 
 function clearEditFormError() {
@@ -1354,6 +1493,9 @@ function closeModal(overlay) {
     dom.editPanel.hidden = true;
     updateDetailModalMode();
   }
+  if (overlay === dom.editorSystemOverlay) {
+    state.pendingEditSwordId = null;
+  }
 }
 
 function updateSelectedCardState() {
@@ -1363,28 +1505,74 @@ function updateSelectedCardState() {
 }
 
 function updateDetailModalMode() {
-  dom.detailModal?.classList.toggle("is-editing", !dom.editPanel.hidden);
+  const isEditing = !dom.editPanel.hidden;
+  dom.detailModal?.classList.toggle("is-editing", isEditing && state.editorSystem === "v1");
+  dom.detailModal?.classList.toggle("is-editingv2", isEditing && state.editorSystem === "v2");
 }
 
 function findSword(id) {
   return state.swords.find((item) => item.id === id) || null;
 }
 
-async function fileToDataUrl(file) {
+function getFileExtension(fileName) {
+  const match = String(fileName || "").toLowerCase().match(/(\.[a-z0-9]+)$/);
+  return match?.[1] || "";
+}
+
+function getSlashAudioContentType(file) {
+  return AUDIO_UPLOAD_EXTENSIONS.get(getFileExtension(file.name)) || file.type.toLowerCase();
+}
+
+function getUploadFormatLabel(file) {
+  const extension = getFileExtension(file.name);
+  return extension ? extension.slice(1).toUpperCase() : (file.type || "this");
+}
+
+function validateUploadFile(file, key) {
+  const contentType = key === "slashAudio" ? getSlashAudioContentType(file) : file.type.toLowerCase();
+  if (key === "slashAudio") {
+    if (!AUDIO_UPLOAD_TYPES.has(contentType)) {
+      throw new Error(`SFX Preview does not support ${getUploadFormatLabel(file)} format. Use MPEG, MP3, OGG, or WAV.`);
+    }
+    if (file.size > MAX_SFX_UPLOAD_BYTES) {
+      throw new Error("SFX Preview must be 1 MB or smaller.");
+    }
+    return;
+  }
+  if (!VISUAL_MEDIA_UPLOAD_TYPES.has(contentType)) {
+    const labels = {
+      img: "Card Media",
+      detailMedia: "VFX Preview",
+      slashMedia: "Slash Preview"
+    };
+    throw new Error(`${labels[key] || "Media"} does not support ${getUploadFormatLabel(file)} format. Use an image or MP4 video.`);
+  }
+  if ((key === "detailMedia" || key === "slashMedia") && file.size > MAX_VISUAL_PREVIEW_UPLOAD_BYTES) {
+    const label = key === "detailMedia" ? "VFX Preview" : "Slash Preview";
+    throw new Error(`${label} must be 10 MB or smaller.`);
+  }
+}
+
+async function fileToDataUrl(file, contentType = file.type) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
+    reader.onload = () => {
+      const result = String(reader.result || "");
+      resolve(contentType && contentType !== file.type ? result.replace(/^data:[^;]+/i, `data:${contentType}`) : result);
+    };
     reader.onerror = () => reject(new Error("Could not read the selected file."));
     reader.readAsDataURL(file);
   });
 }
 
 async function buildUploadMediaPayload(file, key) {
-  if (!file.type.startsWith("image/") || key === "slashAudio") {
-    return fileToDataUrl(file);
+  validateUploadFile(file, key);
+  const contentType = key === "slashAudio" ? getSlashAudioContentType(file) : file.type;
+  if (!contentType.startsWith("image/") || key === "slashAudio") {
+    return fileToDataUrl(file, contentType);
   }
   if (file.type === "image/gif" || file.type === "image/svg+xml") {
-    const original = await fileToDataUrl(file);
+    const original = await fileToDataUrl(file, contentType);
     return {
       kind: "image",
       low: original,
@@ -1393,7 +1581,7 @@ async function buildUploadMediaPayload(file, key) {
     };
   }
 
-  const original = await fileToDataUrl(file);
+  const original = await fileToDataUrl(file, contentType);
   const bitmap = await createImageBitmap(file);
   try {
     const low = await renderImageVariant(bitmap, 192, 0.34);
@@ -1426,11 +1614,17 @@ async function handleFileInput(event, key, previewTarget, emptyText) {
   if (!file) {
     return;
   }
-  const mediaPayload = await buildUploadMediaPayload(file, key);
-  state.pendingMedia[key] = mediaPayload;
-  setPreview(previewTarget, mediaPayload, emptyText);
-  getRemoveButtonForKey(key)?.removeAttribute("hidden");
-  syncDetailPreviewFromEditor();
+  clearEditFormError();
+  try {
+    const mediaPayload = await buildUploadMediaPayload(file, key);
+    state.pendingMedia[key] = mediaPayload;
+    setPreview(previewTarget, mediaPayload, emptyText, key === "slashAudio");
+    getRemoveButtonForKey(key)?.removeAttribute("hidden");
+    syncDetailPreviewFromEditor();
+  } catch (error) {
+    event.target.value = "";
+    showEditFormError(error);
+  }
 }
 
 function clearPendingMedia(key, previewTarget, emptyText, removeButton) {
@@ -1492,7 +1686,7 @@ function attachEvents() {
     const editButton = event.target.closest("[data-edit]");
     if (editButton) {
       event.stopPropagation();
-      openEditModal(Number(editButton.dataset.edit));
+      openEditorChooser(Number(editButton.dataset.edit));
       return;
     }
     const card = event.target.closest("[data-card]");
@@ -1563,6 +1757,21 @@ function attachEvents() {
 
   dom.detailCloseBtn.addEventListener("click", () => closeModal(dom.detailModalOverlay));
   dom.cancelBtn.addEventListener("click", () => closeModal(dom.detailModalOverlay));
+  dom.editorSystemCloseBtn?.addEventListener("click", () => closeModal(dom.editorSystemOverlay));
+  dom.editorSystemV1Btn?.addEventListener("click", () => {
+    const swordId = state.pendingEditSwordId;
+    closeModal(dom.editorSystemOverlay);
+    if (swordId !== null) {
+      openEditModal(swordId, "v1");
+    }
+  });
+  dom.editorSystemV2Btn?.addEventListener("click", () => {
+    const swordId = state.pendingEditSwordId;
+    closeModal(dom.editorSystemOverlay);
+    if (swordId !== null) {
+      openEditModal(swordId, "v2");
+    }
+  });
   dom.deleteBtn.addEventListener("click", handleDeleteSword);
   dom.editForm.addEventListener("submit", handleEditSubmit);
   [dom.fields.name, dom.fields.category, dom.fields.value, dom.fields.demand, dom.fields.trend, dom.fields.count, dom.fields.description].forEach((field) => {
@@ -1571,14 +1780,14 @@ function attachEvents() {
   });
 
   dom.fields.image.addEventListener("change", (event) => handleFileInput(event, "img", dom.fields.imagePreview, "No media"));
-  dom.fields.detailMedia.addEventListener("change", (event) => handleFileInput(event, "detailMedia", dom.fields.detailPreview, "No media"));
-  dom.fields.slashMedia.addEventListener("change", (event) => handleFileInput(event, "slashMedia", dom.fields.slashPreview, "No media"));
-  dom.fields.slashAudio.addEventListener("change", (event) => handleFileInput(event, "slashAudio", dom.fields.audioPreview, "No audio"));
+  dom.fields.detailMedia.addEventListener("change", (event) => handleFileInput(event, "detailMedia", dom.fields.detailPreview, "No VFX preview"));
+  dom.fields.slashMedia.addEventListener("change", (event) => handleFileInput(event, "slashMedia", dom.fields.slashPreview, "No slash preview"));
+  dom.fields.slashAudio.addEventListener("change", (event) => handleFileInput(event, "slashAudio", dom.fields.audioPreview, "No SFX preview"));
 
   dom.fields.imageRemove.addEventListener("click", () => clearPendingMedia("img", dom.fields.imagePreview, "No media", dom.fields.imageRemove));
-  dom.fields.detailRemove.addEventListener("click", () => clearPendingMedia("detailMedia", dom.fields.detailPreview, "No media", dom.fields.detailRemove));
-  dom.fields.slashRemove.addEventListener("click", () => clearPendingMedia("slashMedia", dom.fields.slashPreview, "No media", dom.fields.slashRemove));
-  dom.fields.audioRemove.addEventListener("click", () => clearPendingMedia("slashAudio", dom.fields.audioPreview, "No audio", dom.fields.audioRemove));
+  dom.fields.detailRemove.addEventListener("click", () => clearPendingMedia("detailMedia", dom.fields.detailPreview, "No VFX preview", dom.fields.detailRemove));
+  dom.fields.slashRemove.addEventListener("click", () => clearPendingMedia("slashMedia", dom.fields.slashPreview, "No slash preview", dom.fields.slashRemove));
+  dom.fields.audioRemove.addEventListener("click", () => clearPendingMedia("slashAudio", dom.fields.audioPreview, "No SFX preview", dom.fields.audioRemove));
 
   dom.auditCloseBtn.addEventListener("click", () => closeModal(dom.auditModalOverlay));
   dom.auditRefreshBtn.addEventListener("click", refreshAudit);
@@ -1601,7 +1810,7 @@ function attachEvents() {
     await state.confirmState?.onConfirm?.();
   });
 
-  [dom.detailModalOverlay, dom.auditModalOverlay, dom.confirmModalOverlay, dom.mobileUtilityOverlay, dom.shortcutLoginOverlay].filter(Boolean).forEach((overlay) => {
+  [dom.detailModalOverlay, dom.editorSystemOverlay, dom.auditModalOverlay, dom.confirmModalOverlay, dom.mobileUtilityOverlay, dom.shortcutLoginOverlay].filter(Boolean).forEach((overlay) => {
     overlay.addEventListener("click", (event) => {
       if (event.target === overlay) {
         closeModal(overlay);
@@ -1613,6 +1822,8 @@ function attachEvents() {
     if (event.key === "Escape") {
       if (state.activeModal === dom.detailModalOverlay.id) {
         closeModal(dom.detailModalOverlay);
+      } else if (dom.editorSystemOverlay && state.activeModal === dom.editorSystemOverlay.id) {
+        closeModal(dom.editorSystemOverlay);
       } else if (state.activeModal === dom.auditModalOverlay.id) {
         closeModal(dom.auditModalOverlay);
       } else if (dom.mobileUtilityOverlay && state.activeModal === dom.mobileUtilityOverlay.id) {
