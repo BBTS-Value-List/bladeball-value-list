@@ -10,7 +10,9 @@ Harassment, threats, personal attacks, spam, doxxing, and disruptive behavior ar
 
 ## Enforcement
 
-Maintainers may edit, hide, lock, or remove content and may restrict repository access when these expectations are repeatedly ignored.
+Maintainers may edit, hide, lock, or remove content, close or limit discussions that stop being productive, and may restrict repository access when these expectations are repeatedly ignored.
+
+Technical disagreement is expected. Keep it evidence-based, scoped to the repository, and focused on the code, data, behavior, or process being discussed.
 
 ## Contact
 

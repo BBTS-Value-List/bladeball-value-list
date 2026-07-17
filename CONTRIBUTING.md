@@ -5,6 +5,7 @@
 Keep changes narrow, readable, and directly related to the public site or Worker. Follow the existing vanilla ESM style: two-space indentation, semicolons, focused lower-camel helper names, explicit validation, and self-explanatory code without comments that restate it.
 
 Do not add one-time migrations, local-state importers, database snapshots, generated media, or unrelated dependencies to the public repository.
+Keep public asset entrypoints stable. The tracked site files are `public/app.js`, `public/team.js`, and `public/styles.css`; do not replace them with timestamped or scratch filenames in the repository.
 
 ## Local checks
 
@@ -25,10 +26,12 @@ For UI changes, run the local Worker and verify the affected route. Include a sc
 - Keep public item text suitable for a public website.
 - Test media uploads and detail rendering when changing media handling.
 - Treat staff roles, audit history, owner operations, and remote D1 mutations as maintainer-only work. Do not run a remote mutation tool unless the task explicitly requires it.
+- If you touch uploads, test create, update, preview, and the affected modal flow together instead of validating only one field at a time.
 
 ## Secrets and security
 
 - Never commit `.env`, `.dev.vars`, credentials, OAuth secrets, owner keys, session secrets, or local database state.
+- Never commit local scratch SQL, export dumps, temporary migration helpers, or machine-specific Wrangler state.
 - Use Cloudflare secrets for deployed credentials.
 - Review [SECURITY.md](./SECURITY.md) for changes involving authentication, authorization, uploads, media, or request handling.
 
@@ -41,3 +44,4 @@ Every pull request must state:
 - affected routes or APIs
 - any data or configuration impact
 - screenshots for visible UI changes
+- whether any ignored local helper files were used during the work and confirmed to stay out of the commit

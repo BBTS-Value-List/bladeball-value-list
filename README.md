@@ -6,6 +6,7 @@ BBTSL is a public Blade Ball value-list site served by a Cloudflare Worker. It p
 
 - `public/` contains the static site, including the value list and public team directory.
 - `src/worker.js` serves the site and API, handles Discord OAuth, sessions, authorization, D1 access, media delivery, and security headers.
+- Public assets use the stable entrypoints `public/app.js`, `public/team.js`, and `public/styles.css`. Self-hosted fonts live under `public/fonts/`.
 - Cloudflare D1 stores item, media, user, role, audit, and rate-limit data. Sessions are signed cookies.
 - `scripts/generate-secret-token.mjs` generates a high-entropy value for a Worker secret.
 
@@ -30,6 +31,7 @@ The local Worker listens on the URL printed by Wrangler. It uses local D1 state 
 npm run check
 npx wrangler deploy --dry-run
 npm audit
+git diff --check
 ```
 
 ## Configuration and secrets
@@ -44,6 +46,8 @@ The Worker requires these values:
 - `DISCORD_REDIRECT_URI` — an HTTPS Discord OAuth callback URL
 
 Public runtime values such as `PUBLIC_SITE_URL` and `SITE_NAME` belong in `wrangler.jsonc`. Put sensitive Worker values in Cloudflare secrets for deployments. `DISCORD_BOT_TOKEN` remains a local integration placeholder and is not used or accepted by this Worker.
+
+Keep local scratch material out of commits. That includes `.dev.vars`, `.env`, Wrangler state, local SQLite files, one-off SQL helpers, export dumps, and import or migration scratch files that only exist to support a local operation.
 
 Generate a new random secret value with:
 
@@ -66,6 +70,8 @@ Discord bots can read the public API directly from `https://bbtsl.lol`. It is a 
 
 The public API is rate-limited to 120 requests per minute per client and cached for up to 60 seconds. It does not send permissive CORS headers because Discord bots should call it from their server process, not browser JavaScript.
 
+The staff site routes and mutation endpoints are separate from the public API. They require Discord sign-in, role checks, same-origin requests, and the Worker request header checks enforced by `src/worker.js`.
+
 ## Contributor guidance
 
 Read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening a pull request. Use the issue forms for public bugs, feature requests, and data corrections. Do not report vulnerabilities publicly; follow [SECURITY.md](./SECURITY.md).
@@ -79,3 +85,7 @@ Read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening a pull request. Use the
 ## Legal
 
 BBTSL is an unofficial fan project and is not affiliated with Roblox, Blade Ball, or their owners. Read the live [Privacy Policy](https://bbtsl.lol/privacy), [Terms of Service](https://bbtsl.lol/terms), and [legal notice](./LEGAL.md) for data handling, terms, and rights concerns.
+
+## Support and security
+
+For public bugs, feature work, and data corrections, use the repository issue forms. For security, rights, or sensitive account concerns, use the contact paths in [SECURITY.md](./SECURITY.md) and [SUPPORT.md](./SUPPORT.md).
