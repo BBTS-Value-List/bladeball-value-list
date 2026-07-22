@@ -10,6 +10,9 @@
     "api:v1-key": "node scripts/v1-api-key.mjs",
     "check": "node --check src/worker.js && node --check public/app.js && node --check public/team.js"
   },
+  "overrides": {
+    "sharp": "0.35.3"
+  },
   "devDependencies": {
     "wrangler": "^4.113.0"
   }

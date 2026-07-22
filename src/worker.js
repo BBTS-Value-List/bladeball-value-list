@@ -46,7 +46,6 @@ const MAX_IMAGE_BYTES = 3 * 1024 * 1024;
 const MAX_MEDIA_BYTES = 8 * 1024 * 1024;
 const MAX_SFX_BYTES = 1 * 1024 * 1024;
 const MAX_VISUAL_PREVIEW_BYTES = 10 * 1024 * 1024;
-const DIRECT_MEDIA_READ_LIMIT = 512 * 1024;
 const D1_MEDIA_CHUNK_BYTES = 1 * 1024 * 1024;
 const R2_CLASS_A_LIMIT = 1_000_000;
 const R2_CLASS_B_LIMIT = 10_000_000;
@@ -2349,19 +2348,13 @@ async function reserveR2Usage(env, classADelta, classBDelta, storageDeltaBytes) 
     const nextStorage = Number(state.usage?.totalStorageBytes || 0) + Number(storageDeltaBytes || 0);
 
     if (nextClassA > R2_CLASS_A_LIMIT) {
-      throw new HttpError(507, "R2 Class A limit reached for the current month.", {}, {
-        phase: "storage.r2_class_a_limit"
-      });
+      throw new HttpError(507, "R2 Class A limit reached for the current month.");
     }
     if (nextClassB > R2_CLASS_B_LIMIT) {
-      throw new HttpError(507, "R2 Class B limit reached for the current month.", {}, {
-        phase: "storage.r2_class_b_limit"
-      });
+      throw new HttpError(507, "R2 Class B limit reached for the current month.");
     }
     if (nextStorage > R2_STORAGE_LIMIT_BYTES) {
-      throw new HttpError(507, "R2 storage limit reached.", {}, {
-        phase: "storage.r2_storage_limit"
-      });
+      throw new HttpError(507, "R2 storage limit reached.");
     }
 
     return {
@@ -2465,55 +2458,6 @@ async function readMediaBody(value) {
   }
 
   return null;
-}
-
-async function readMediaBodyFromChunks(env, key, mediaSize) {
-  if (!Number.isFinite(mediaSize) || mediaSize <= 0) {
-    return null;
-  }
-
-  const chunked = new Uint8Array(mediaSize);
-  let chunkOffset = 0;
-  const chunkRowsResult = await env.DB.prepare(`
-    SELECT chunk_index, chunk_data
-    FROM media_chunks
-    WHERE image_key = ?
-    ORDER BY chunk_index ASC
-  `).bind(key).all();
-  const chunkRows = Array.isArray(chunkRowsResult?.results) ? chunkRowsResult.results : [];
-  for (let rowIndex = 0; rowIndex < chunkRows.length && chunkOffset < mediaSize; rowIndex += 1) {
-    const row = chunkRows[rowIndex];
-    if (Number(row?.chunk_index) !== rowIndex) {
-      break;
-    }
-    const chunk = await readMediaBody(row?.chunk_data);
-    const expectedLength = Math.min(D1_MEDIA_CHUNK_BYTES, mediaSize - chunkOffset);
-    if (!chunk || chunk.byteLength !== expectedLength) {
-      break;
-    }
-    chunked.set(chunk, chunkOffset);
-    chunkOffset += chunk.byteLength;
-  }
-  if (chunkOffset === mediaSize) {
-    return chunked;
-  }
-
-  const chunkSize = 262144;
-  const bytes = new Uint8Array(mediaSize);
-  for (let offset = 0; offset < mediaSize; offset += chunkSize) {
-    const length = Math.min(chunkSize, mediaSize - offset);
-    const row = await env.DB.prepare(`
-      SELECT hex(substr(image_data, ?, ?)) AS media_hex
-      FROM sword_images
-      WHERE image_key = ?
-    `).bind(offset + 1, length, key).first();
-    const chunk = hexToBytes(row?.media_hex);
-    if (chunk.byteLength !== length) {
-      return null;
-    }
-    bytes.set(chunk, offset);
-  }
-  return bytes;
 }
 
 function hexToBytes(value) {
@@ -3386,15 +3330,6 @@ async function buildLcpPreloadMarkup(request, env) {
     console.error("Could not build the homepage image preload.", error);
     return "";
   }
-}
-
-function getCanonicalPagePath(request) {
-  const canonicalPath = getCanonicalBasePath(request);
-  const itemCardId = getRequestedItemCardId(request);
-  if (canonicalPath === "/" && itemCardId) {
-    return `/?item=${encodeURIComponent(String(itemCardId).replace(/^#/, ""))}`;
-  }
-  return canonicalPath;
 }
 
 function getCanonicalBasePath(request) {
